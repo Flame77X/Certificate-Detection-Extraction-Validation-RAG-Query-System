@@ -1,0 +1,48 @@
+[
+  {
+    "doc_id": "sample_certificate",
+    "fields": {
+      "issuer": "Global Tech Institute",
+      "certificate_number": "GTI-2024-88A",
+      "issued_date": "2024-03-10",
+      "expiry_date": "2027-03-10",
+      "subject": "Advanced Python Systems Engineering Certification Program"
+    },
+    "confidence": {
+      "issuer": 0.95,
+      "certificate_number": 0.95,
+      "issued_date": 0.95,
+      "expiry_date": 0.95,
+      "subject": 0.95
+    },
+    "confidence_flags": [],
+    "validation": {
+      "issued_date_valid": true,
+      "expiry_status": "valid",
+      "dates_consistent": true
+    }
+  },
+  {
+    "doc_id": "sample_expired_cert",
+    "fields": {
+      "issuer": "Development Institute",
+      "certificate_number": "EXP-2023-001",
+      "issued_date": "2023-01-15",
+      "expiry_date": "2023-06-15",
+      "subject": "Professional Skills Training"
+    },
+    "confidence": {
+      "issuer": 0.95,
+      "certificate_number": 0.95,
+      "issued_date": 0.95,
+      "expiry_date": 0.95,
+      "subject": 0.95
+    },
+    "confidence_flags": [],
+    "validation": {
+      "issued_date_valid": true,
+      "expiry_status": "expired",
+      "dates_consistent": true
+    }
+  }
+]
