@@ -52,3 +52,31 @@ def validate_dates(issued_date_str, expiry_date_str):
         "expiry_status": expiry_status,
         "dates_consistent": dates_consistent
     }
+def validate_issuer(issuer_name):
+    """Validate issuer against trusted issuer list"""
+    import json
+    import os
+    
+    try:
+        # Load trusted list from project root
+        filepath = os.path.join(os.path.dirname(__file__), '..', 'trusted_issuers.json')
+        with open(filepath, 'r') as f:
+            trusted_list = json.load(f)
+        
+        # Check matching
+        if not issuer_name:
+            is_trusted = False
+        else:
+            is_trusted = issuer_name in trusted_list['trusted_issuers']
+        
+        return {
+            'issuer': issuer_name,
+            'is_trusted': is_trusted,
+            'status': 'Valid Issuer' if is_trusted else 'Untrusted Issuer'
+        }
+    except Exception as e:
+        return {
+            'issuer': issuer_name,
+            'is_trusted': False,
+            'status': f'Unable to validate: {str(e)}'
+        }

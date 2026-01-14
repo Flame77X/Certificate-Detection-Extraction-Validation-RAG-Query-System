@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CertifEye AI | Premium Verification</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+    <div class="background-mesh"></div>
+
+    <div class="app-layout">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="brand">
+                <i data-lucide="shield-check" class="logo-icon"></i>
+                <span>CertifEye</span>
+            </div>
+
+            <div class="nav-items">
+                <a href="#" class="active"><i data-lucide="layout-dashboard"></i> Dashboard</a>
+                <a href="#"><i data-lucide="history"></i> History</a>
+                <a href="#"><i data-lucide="settings"></i> Settings</a>
+            </div>
+
+            <div class="user-profile">
+                <div class="avatar">RA</div>
+                <div class="user-info">
+                    <span class="name">Rahul A.</span>
+                    <span class="role">Admin</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h1>Verification Dashboard</h1>
+                <div class="status-indicator">System Active <span class="dot"></span></div>
+            </header>
+
+            <div class="content-grid">
+                <!-- LEFT COLUMN: Upload & Preview -->
+                <div class="col-left">
+                    <div class="upload-card card glass" id="dropZone">
+                        <div class="upload-content">
+                            <div class="icon-circle">
+                                <i data-lucide="upload-cloud"></i>
+                            </div>
+                            <h3>Upload Certificate</h3>
+                            <p>Drag & drop PDF or Image</p>
+                            <button class="btn-primary" onclick="document.getElementById('fileInput').click()">Browse
+                                Files</button>
+                            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg" hidden>
+                        </div>
+                        <div id="uploadLoader" class="loader-overlay hidden">
+                            <div class="spinner"></div>
+                            <span>Analyzing Document...</span>
+                        </div>
+                    </div>
+
+                    <!-- PREVIEW CONTAINER -->
+                    <div class="preview-card card glass hidden" id="previewContainer">
+                        <div class="card-header">
+                            <h3>Document Preview</h3>
+                            <button class="btn-icon" onclick="resetUpload()"><i data-lucide="x"></i></button>
+                        </div>
+                        <div class="preview-frame">
+                            <iframe id="filePreview" title="Certificate Preview"></iframe>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT COLUMN: Results & Intelligence -->
+                <div class="col-right hidden" id="resultsArea">
+                    <!-- Status Header -->
+                    <div class="status-header card glass">
+                        <div class="status-info">
+                            <span class="label">Validation Status</span>
+                            <div class="status-badge-lg" id="mainStatusBadge">VERIFIED</div>
+                        </div>
+                        <div class="trust-score">
+                            <svg viewBox="0 0 36 36" class="circular-chart green">
+                                <path class="circle-bg"
+                                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                <path class="circle" stroke-dasharray="98, 100"
+                                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                            </svg>
+                            <span class="score-text">98%</span>
+                        </div>
+                    </div>
+
+                    <!-- Tabs for Details/Chat -->
+                    <div class="tabs">
+                        <button class="tab-btn active" onclick="switchTab('details')">Extracted Data</button>
+                        <button class="tab-btn" onclick="switchTab('chat')">AI Assistant</button>
+                    </div>
+
+                    <!-- TAB 1: Details -->
+                    <div id="tabDetails" class="tab-content active">
+                        <div class="details-grid-modern" id="fieldsGrid">
+                            <!-- Populated by JS -->
+                        </div>
+
+                        <div class="validation-log card glass">
+                            <h4><i data-lucide="activity"></i> Validation Log</h4>
+                            <ul id="validationSteps">
+                                <!-- Populated by JS -->
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: Chat -->
+                    <div id="tabChat" class="tab-content card glass chat-container">
+                        <div class="chat-messages" id="chatHistory">
+                            <div class="msg ai">
+                                <div class="avatar-ai"><i data-lucide="bot"></i></div>
+                                <div class="bubble">I've analyzed this document. What would you like to know?</div>
+                            </div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input type="text" id="chatInput" placeholder="Ask about this certificate...">
+                            <button class="btn-send" onclick="sendChat()"><i data-lucide="send"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        lucide.createIcons();
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        // --- Drag & Drop ---
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('active');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) handleFile(fileInput.files[0]);
+        });
+
+        function handleFile(file) {
+            // 1. Show Preview
+            const previewContainer = document.getElementById('previewContainer');
+            const filePreview = document.getElementById('filePreview');
+            const objectUrl = URL.createObjectURL(file);
+
+            previewContainer.classList.remove('hidden');
+            filePreview.src = objectUrl;
+
+            // 2. Upload
+            uploadToServer(file);
+        }
+
+        async function uploadToServer(file) {
+            const loader = document.getElementById('uploadLoader');
+            loader.classList.remove('hidden');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+
+                if (data.success) {
+                    renderResults(data.data);
+                } else {
+                    alert("Error: " + data.error);
+                }
+            } catch (e) {
+                console.error(e);
+                alert("Upload failed.");
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        function renderResults(data) {
+            document.getElementById('resultsArea').classList.remove('hidden');
+            document.getElementById('dropZone').classList.add('compact'); // Shrink upload area
+
+            // Status Badge
+            const badge = document.getElementById('mainStatusBadge');
+            badge.className = 'status-badge-lg ' + data.final_status.toLowerCase().replace(/ /g, '-');
+            badge.innerText = data.final_status;
+
+            // Fields
+            const grid = document.getElementById('fieldsGrid');
+            grid.innerHTML = '';
+            for (const [key, field] of Object.entries(data.fields)) {
+                if (!field) continue;
+                grid.innerHTML += `
+                    <div class="field-box card glass-sm">
+                        <span class="label">${key.replace('_', ' ')}</span>
+                        <div class="value">${field}</div>
+                        <div class="confidence-dot" style="opacity: ${data.confidence[key]}"></div>
+                    </div>
+                `;
+            }
+
+            // Logs
+            const steps = document.getElementById('validationSteps');
+            const isIssuerValid = data.issuer_validation.is_trusted || data.issuer_validation.status.includes("Verified");
+
+            steps.innerHTML = `
+                <li class="success"><i data-lucide="check-circle"></i> Extracted Text</li>
+                <li class="${isIssuerValid ? 'success' : 'warning'}">
+                    <i data-lucide="${isIssuerValid ? 'check-circle' : 'alert-triangle'}"></i> 
+                    Issuer Check: ${data.issuer_validation.status}
+                </li>
+                <li class="${data.validation.dates_consistent ? 'success' : 'warning'}">
+                    <i data-lucide="calendar"></i> Date Logic Checks
+                </li>
+            `;
+            lucide.createIcons();
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+
+            document.getElementById(tabName === 'details' ? 'tabDetails' : 'tabChat').classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        async function sendChat() {
+            const input = document.getElementById('chatInput');
+            const history = document.getElementById('chatHistory');
+            const val = input.value;
+            if (!val) return;
+
+            // User Msg
+            history.innerHTML += `<div class="msg user"><div class="bubble">${val}</div></div>`;
+            input.value = '';
+            history.scrollTop = history.scrollHeight;
+
+            // AI Msg
+            const res = await fetch('/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: val })
+            });
+            const data = await res.json();
+
+            history.innerHTML += `
+                <div class="msg ai">
+                    <div class="avatar-ai"><i data-lucide="bot"></i></div>
+                    <div class="bubble">${data.answer}</div>
+                </div>
+            `;
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function resetUpload() {
+            document.getElementById('previewContainer').classList.add('hidden');
+            document.getElementById('resultsArea').classList.add('hidden');
+            document.getElementById('filePreview').src = "";
+            document.getElementById('dropZone').classList.remove('compact');
+        }
+    </script>
+</body>
+
+</html>

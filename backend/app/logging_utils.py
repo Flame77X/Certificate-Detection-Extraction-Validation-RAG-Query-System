@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 import os
 
+from app.security import redact_pii
+
 LOG_FILE = 'extraction_logs.json'
 
 def log_extraction(doc_id, fields, confidence, date_validation, flags):
@@ -19,11 +21,14 @@ def log_extraction(doc_id, fields, confidence, date_validation, flags):
         dict: The log entry that was written.
     """
     
+    # Security: Redact PII from logs
+    safe_fields = redact_pii(fields)
+    
     log_entry = {
         "doc_id": doc_id,
         "timestamp": datetime.now().isoformat(),
         "stage": "extraction_validation",
-        "extracted_fields": fields,
+        "extracted_fields": safe_fields,
         "confidence_scores": confidence,
         "date_validation": date_validation,
         "confidence_flags": flags,

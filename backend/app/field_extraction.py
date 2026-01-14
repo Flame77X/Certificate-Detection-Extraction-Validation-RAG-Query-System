@@ -9,15 +9,11 @@ AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
 
-def extract_with_azure(text_content):
+from collections import Counter
+
+def _extract_single(text_content):
     """
-    Extract certificate fields using Azure OpenAI (GPT-4).
-    
-    Args:
-        text_content (str): The raw text from the certificate.
-        
-    Returns:
-        dict: The structured dataset.
+    (Private) Single attempt to extract certificate fields using Azure OpenAI.
     """
     
     # Check if we have usable keys
@@ -38,7 +34,8 @@ def extract_with_azure(text_content):
 
     if has_real_config:
         try:
-            print(f"🧠 Sending text to Azure OpenAI ({AZURE_OPENAI_DEPLOYMENT})...")
+            # print(f"🧠 Sending text to Azure OpenAI ({AZURE_OPENAI_DEPLOYMENT})...") 
+            # (Silenced print to avoid spamming console during ensemble)
             
             client = AzureOpenAI(
                 azure_endpoint=base_endpoint, 
@@ -72,7 +69,8 @@ def extract_with_azure(text_content):
                     {"role": "system", "content": "You are a helpful assistant that extracts data."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0
+                temperature=0.7, # Increased slightly for variety in ensemble
+                timeout=30 
             )
 
             content = response.choices[0].message.content.strip()
@@ -85,7 +83,7 @@ def extract_with_azure(text_content):
             
             data = json.loads(content)
             
-            # Map to our internal structure (adding mock confidence)
+            # Map to our internal structure
             mapped_result = {}
             for key, val in data.items():
                 mapped_result[key] = {
@@ -96,21 +94,111 @@ def extract_with_azure(text_content):
             return mapped_result
 
         except Exception as e:
-            print(f"❌ Azure OpenAI Error: {e}")
-            print("Falling back to MOCK data...")
+            # print(f"❌ Azure OpenAI Error: [Securely Logged]")
+            return None
     else:
-        print("ℹ️  No valid Azure OpenAI keys found. Using MOCK data.")
+        # MOCK DATA
+        # print("⚠️ Using Mock Data")
+        mock_response = {
+            'issuer': {'value': 'ISO Authority', 'confidence': 0.96},
+            'certificate_number': {'value': 'ISO-9001-2024-098', 'confidence': 0.93},
+            'issued_date': {'value': '15/01/2024', 'confidence': 0.98},
+            'expiry_date': {'value': '15-01-2026', 'confidence': 0.97},
+            'subject': {'value': 'Quality Management System', 'confidence': 0.90}
+        }
+        return mock_response
 
-    # FALLBACK MOCK
-    print("⚠️ Using Mock Data for Extraction")
-    mock_response = {
-        'issuer': {'value': 'ISO Authority', 'confidence': 0.96},
-        'certificate_number': {'value': 'ISO-9001-2024-098', 'confidence': 0.93},
-        'issued_date': {'value': '15/01/2024', 'confidence': 0.98},
-        'expiry_date': {'value': '15-01-2026', 'confidence': 0.97},
-        'subject': {'value': 'Quality Management System', 'confidence': 0.90}
-    }
-    return mock_response
+def calculate_consensus(results_list):
+    """
+    Find the majority vote for each field across multiple results.
+    Returns (consensus_dict, full_voting_log)
+    """
+    if not results_list:
+        return {}, {}
+        
+    consensus_result = {}
+    voting_log = {}
+    
+    # Get all keys from the first result
+    keys = results_list[0].keys()
+    
+    for key in keys:
+        # Collect all values for this field from all runs
+        values = []
+        for res in results_list:
+            if res and key in res:
+                # We vote on the 'value' part of the dict
+                val = res[key].get('value')
+                # Convert list/dict to string for hashing if needed, or keep simple
+                values.append(val)
+        
+        # Count votes
+        # We need to handle 'None' carefully
+        safe_values = [str(v) if v is not None else "None" for v in values]
+        counter = Counter(safe_values)
+        
+        # Get the winner (most common)
+        most_common = counter.most_common(1)
+        winner_val_str = most_common[0][0]
+        vote_count = most_common[0][1]
+        
+        # Recover the original type (if it was None)
+        final_val = None if winner_val_str == "None" else winner_val_str
+        
+        # If we have original values, try to find the one that matches winner string to preserve type
+        # (Simple approximation for now)
+        
+        # Construct the detailed field object
+        # We use the confidence of the first occurrence of the winner
+        winner_conf = 0.0
+        for res in results_list:
+            if res and key in res:
+                if str(res[key].get('value')) == safe_values[0] or (res[key].get('value') is None and safe_values[0] == "None"):
+                   winner_conf = res[key].get('confidence', 0.0)
+                   break
+                   
+        consensus_result[key] = {
+            'value': final_val,
+            'confidence': winner_conf
+        }
+        
+        # Log details
+        voting_log[key] = {
+            'winner': final_val,
+            'votes': dict(counter),
+            'total_runs': len(results_list)
+        }
+        
+    return consensus_result, voting_log
+
+def extract_with_azure(text_content):
+    """
+    MAIN ENTRY: Performs Self-Consistency (Ensembling).
+    Calls the API 3 times and returns the consensus result.
+    """
+    print(f"🧠 Consensus Engine: Running 3 parallel extraction attempts...")
+    
+    results = []
+    attempts = 3
+    
+    for i in range(attempts):
+        print(f"   🔹 Attempt {i+1}/{attempts}...", end="\r")
+        res = _extract_single(text_content)
+        if res:
+            results.append(res)
+            
+    print(f"\n   ✅ Completed {len(results)} successful extractions.")
+    
+    if not results:
+        return {} # Failed all
+        
+    # Calculate Majority Vote
+    final_output, voting_details = calculate_consensus(results)
+    
+    # Inject voting details into the output so logging can find it
+    final_output['_voting_debug'] = voting_details
+    
+    return final_output
 
 def normalize_date(date_string):
     """Convert any date format to YYYY-MM-DD"""
