@@ -3,7 +3,7 @@ import os
 import shutil
 from datetime import datetime
 from batch_processor import process_single_file
-# from app.rag_pipeline import CertificateRAG # Optional RAG import
+from app.rag_pipeline import CertificateRAG
 
 # Configure Flask to look for frontend in sibling directory
 app = Flask(__name__, 
@@ -11,12 +11,13 @@ app = Flask(__name__,
             static_folder='../frontend/static')
 
 # RAG Integration (The "Memory")
-# try:
-#     rag = CertificateRAG()
-#     print("🧠 RAG System Initialized")
-# except Exception as e:
-#     print(f"⚠️ RAG Init Failed: {e}")
-#     rag = None
+# RAG Integration (The "Memory")
+try:
+    rag = CertificateRAG()
+    print("🧠 RAG System Initialized")
+except Exception as e:
+    print(f"⚠️ RAG Init Failed: {e}")
+    rag = None
 
 UPLOAD_FOLDER = os.path.join('data', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -47,21 +48,22 @@ def upload_file():
                  return jsonify({'success': False, 'error': 'Document processing failed or not a certificate.'}), 400
 
             # 2. RAG Ingestion (The "Memory")
-            # if rag:
-            #     rag.ingest_certificate(result)
+            # 2. RAG Ingestion (The "Memory")
+            if rag:
+                rag.ingest_certificate(result)
             
             return jsonify({'success': True, 'data': result})
             
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
-# @app.route('/query', methods=['POST'])
-# def query_rag():
-#     if not rag:
-#         return jsonify({'answer': "RAG System is offline."})
-#     data = request.json
-#     answer = rag.answer_question(data.get('question'))
-#     return jsonify({'answer': answer})
+@app.route('/query', methods=['POST'])
+def query_rag():
+    if not rag:
+        return jsonify({'answer': "RAG System is offline."})
+    data = request.json
+    answer = rag.answer_question(data.get('question'))
+    return jsonify({'answer': answer})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
