@@ -13,7 +13,8 @@ sys.path.append(BACKEND_DIR)
 
 from app import field_extraction as fe
 from app import rag_pipeline as rp
-from app.date_validation import validate_issuer, normalize_issuer
+from app.date_validation import validate_dates, validate_issuer, normalize_issuer
+from app.logging_utils import check_for_issues
 from app.security import validate_secure_path, redact_pii, ALLOWED_DATA_DIR
 from app.status_assignment import assign_certificate_status
 
@@ -39,10 +40,10 @@ class TestConsensus(unittest.TestCase):
         result, _ = fe.calculate_consensus(runs)
         self.assertEqual(result['issuer'], {'value': 'AWS Training', 'confidence': 1.0})
 
-    def test_null_winner_has_zero_confidence(self):
+    def test_agreed_absence_keeps_confidence(self):
         runs = [{'expiry_date': None}, {'expiry_date': None}, {'expiry_date': '2030-01-01'}]
         result, _ = fe.calculate_consensus(runs)
-        self.assertEqual(result['expiry_date'], {'value': None, 'confidence': 0.0})
+        self.assertEqual(result['expiry_date'], {'value': None, 'confidence': 0.67})
 
     def test_failed_runs_lower_confidence(self):
         result, _ = fe.calculate_consensus([{'issuer': 'A'}], total_runs=3)
@@ -79,6 +80,28 @@ class TestExtraction(unittest.TestCase):
         self.assertEqual(fields['issuer'], 'ISO Authority')
         self.assertEqual(fields['issued_date'], '2024-01-15')
         self.assertEqual(confidence['issuer'], 1.0)
+
+
+class TestNoExpiryCertificates(unittest.TestCase):
+
+    def test_missing_expiry_is_not_an_error(self):
+        res = validate_dates('2024-01-01', None)
+        self.assertEqual(res['expiry_status'], 'no_expiry')
+        self.assertTrue(res['issued_date_valid'])
+        self.assertTrue(res['dates_consistent'])
+
+    def test_missing_issued_date_is_still_invalid(self):
+        self.assertFalse(validate_dates(None, '2030-01-01')['issued_date_valid'])
+
+    def test_no_missing_flag_for_optional_expiry(self):
+        flags = check_for_issues({'issuer': 'IEEE', 'expiry_date': None}, {'issuer': 1.0, 'expiry_date': 1.0})
+        self.assertEqual(flags, [])
+
+    def test_no_expiry_certificate_can_be_verified(self):
+        fields = {'issuer': 'IEEE', 'issued_date': '2024-01-01', 'subject': 'X', 'expiry_date': None}
+        data = {'fields': fields, 'confidence': {k: 1.0 for k in fields}}
+        status = assign_certificate_status(data, validate_dates('2024-01-01', None), {'is_trusted': True})
+        self.assertEqual(status, 'Verified')
 
 
 class TestStatusAssignment(unittest.TestCase):

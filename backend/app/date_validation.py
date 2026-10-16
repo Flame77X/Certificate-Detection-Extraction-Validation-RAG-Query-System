@@ -21,15 +21,24 @@ def validate_dates(issued_date_str, expiry_date_str):
     # Parse dates
     try:
         # Handle cases where input might be None or empty
-        if not issued_date_str or not expiry_date_str:
+        if not issued_date_str:
              return {
                 "issued_date_valid": False,
                 "expiry_status": "invalid_format",
                 "dates_consistent": False,
-                "error": "Missing date values"
+                "error": "Missing issued date"
             }
 
         issued_date = datetime.strptime(issued_date_str, '%Y-%m-%d').date()
+
+        # Many certificates (course completion, degrees) never expire
+        if not expiry_date_str:
+            return {
+                "issued_date_valid": issued_date <= today,
+                "expiry_status": "no_expiry",
+                "dates_consistent": True
+            }
+
         expiry_date = datetime.strptime(expiry_date_str, '%Y-%m-%d').date()
     except ValueError:
         return {

@@ -95,7 +95,8 @@ def calculate_consensus(results_list, total_runs=None):
 
     results_list: list of {field: value-or-None}
     Returns (consensus, voting_log) where consensus is {field: {'value', 'confidence'}}
-    and confidence = share of runs that agree with the winning value (0.0 if the winner is null).
+    and confidence = share of runs that agree with the winning value. A null winner means the runs
+    agree the field is absent (e.g. no expiry date); missing critical fields are still caught downstream.
     total_runs defaults to len(results_list); pass the attempt count so failed runs lower confidence.
     """
     if not results_list:
@@ -111,12 +112,12 @@ def calculate_consensus(results_list, total_runs=None):
         winner_key, vote_count = counter.most_common(1)[0]
 
         if winner_key is None:
-            final_val, conf = None, 0.0
+            final_val = None
         else:
             # Keep the most common original spelling among the agreeing runs
             originals = Counter(v for v in values if _vote_key(v) == winner_key)
             final_val = originals.most_common(1)[0][0]
-            conf = round(vote_count / total_runs, 2)
+        conf = round(vote_count / total_runs, 2)
 
         consensus_result[key] = {'value': final_val, 'confidence': conf}
         voting_log[key] = {

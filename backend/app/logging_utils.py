@@ -6,6 +6,9 @@ from app.security import redact_pii, BACKEND_DIR
 
 LOG_FILE = os.path.join(BACKEND_DIR, 'extraction_logs.json')
 
+# Fields whose absence is legitimate (e.g. certificates that never expire)
+OPTIONAL_FIELDS = {'expiry_date'}
+
 def log_extraction(doc_id, fields, confidence, date_validation, flags):
     """
     Log extraction results to a JSON line file.
@@ -61,7 +64,7 @@ def check_for_issues(fields, confidence):
     # Check for missing fields
     if fields:
         for field, value in fields.items():
-            if not value:
+            if not value and field not in OPTIONAL_FIELDS:
                 flags.append(f"MISSING_{field.upper()}")
     
     # Check for low confidence (< 0.80)
