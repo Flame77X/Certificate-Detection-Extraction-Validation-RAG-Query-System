@@ -14,6 +14,7 @@ sys.path.append(BACKEND_DIR)
 from app import field_extraction as fe
 from app import rag_pipeline as rp
 from app import ocr_module
+from app import llm_client
 from app import external_verification as ev
 from app.rule_extraction import extract_with_rules
 from app.date_validation import validate_dates, validate_issuer, normalize_issuer
@@ -28,6 +29,32 @@ def fake_chat_client(contents):
     def create(**_kwargs):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=next(replies)))])
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+
+class TestChatBackendSelection(unittest.TestCase):
+    AZURE = {'AZURE_OPENAI_API_KEY': 'k', 'AZURE_OPENAI_ENDPOINT': 'https://x.openai.azure.com'}
+    HF = {'HF_TOKEN': 'hf_abc123'}
+
+    def backend(self, env):
+        clean = {k: '' for k in ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'HF_TOKEN', 'LLM_PROVIDER', 'HF_MODEL')}
+        with mock.patch.dict(os.environ, {**clean, **env}):
+            return llm_client.get_chat_backend()
+
+    def test_azure_preferred_when_both_configured(self):
+        self.assertEqual(self.backend({**self.AZURE, **self.HF}).provider, 'azure')
+
+    def test_huggingface_when_only_token(self):
+        backend = self.backend(self.HF)
+        self.assertEqual((backend.provider, backend.model), ('huggingface', llm_client.HF_DEFAULT_MODEL))
+        self.assertEqual(str(backend.client.base_url).rstrip('/'), llm_client.HF_BASE_URL)
+
+    def test_forced_provider_and_model_override(self):
+        backend = self.backend({**self.AZURE, **self.HF, 'LLM_PROVIDER': 'huggingface', 'HF_MODEL': 'org/model'})
+        self.assertEqual((backend.provider, backend.model), ('huggingface', 'org/model'))
+
+    def test_none_without_credentials_or_with_placeholders(self):
+        self.assertIsNone(self.backend({}))
+        self.assertIsNone(self.backend({'HF_TOKEN': 'hf_your_token_here'}))
 
 
 class TestOCRRouting(unittest.TestCase):
