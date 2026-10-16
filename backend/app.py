@@ -19,7 +19,7 @@ except Exception as e:
     print(f"⚠️ RAG Init Failed: {e}")
     rag = None
 
-UPLOAD_FOLDER = os.path.join('data', 'uploads')
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route('/')

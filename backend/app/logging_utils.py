@@ -2,9 +2,9 @@ import json
 from datetime import datetime
 import os
 
-from app.security import redact_pii
+from app.security import redact_pii, BACKEND_DIR
 
-LOG_FILE = 'extraction_logs.json'
+LOG_FILE = os.path.join(BACKEND_DIR, 'extraction_logs.json')
 
 def log_extraction(doc_id, fields, confidence, date_validation, flags):
     """

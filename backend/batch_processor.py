@@ -16,7 +16,7 @@ from app.certificate_identification import is_certificate
 from app.field_extraction import extract_with_azure, extract_fields, create_json_output
 from app.date_validation import validate_dates, validate_issuer
 from app.logging_utils import log_extraction, check_for_issues
-from app.security import validate_secure_path, MAX_BATCH_SIZE, redact_pii
+from app.security import validate_secure_path, MAX_BATCH_SIZE, redact_pii, BACKEND_DIR
 from app.status_assignment import assign_certificate_status
 from app.external_verification import verify_external_issuer
 
@@ -133,16 +133,18 @@ def process_batch(csv_file):
     print(f"Found {len(valid_files)} files to process.\n")
 
     for file_path in valid_files:
-        # Security: Allow relative paths in CSV to be resolved against data dir if needed
-        # But our simple validator expects absolute or correct relative paths.
-        # Let's rely on process_single_file calling extract_text_from_file which validates it.
-        result = process_single_file(file_path.strip())
+        # Relative CSV entries are resolved against backend/ so the batch works from any CWD.
+        # process_single_file -> extract_text_from_file still enforces the data/ sandbox.
+        file_path = file_path.strip()
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(BACKEND_DIR, file_path)
+        result = process_single_file(file_path)
         if result:
             results.append(result)
         print("-" * 30)
 
     # Save Batch Results
-    output_file = 'batch_results.json'
+    output_file = os.path.join(BACKEND_DIR, 'batch_results.json')
     
     # Security: Redact PII in Batch Output
     safe_results = []
@@ -161,7 +163,7 @@ def process_batch(csv_file):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Batch process certificates from CSV')
-    parser.add_argument('--csv', default='data/batch_test.csv', help='Path to CSV file containing file paths')
+    parser.add_argument('--csv', default=os.path.join(BACKEND_DIR, 'data', 'batch_test.csv'), help='Path to CSV file containing file paths')
     args = parser.parse_args()
     
     process_batch(args.csv)

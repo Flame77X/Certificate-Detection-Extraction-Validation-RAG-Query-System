@@ -4,7 +4,8 @@ import re
 # Security Constants
 MAX_FILE_SIZE_MB = 10
 MAX_BATCH_SIZE = 50
-ALLOWED_DATA_DIR = os.path.abspath('data')
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ALLOWED_DATA_DIR = os.path.join(BACKEND_DIR, 'data')
 
 def validate_secure_path(file_path):
     """
