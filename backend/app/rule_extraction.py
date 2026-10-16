@@ -28,10 +28,12 @@ PATTERNS = {
     'issuer': rf'(?:issued\s+by|issuer|awarded\s+by|certifying\s+(?:body|authority)){SEP}(?P<v>[^\n.;,]+?)(?=\s+on\s|[.;,]\s|[.;,]?$|\n)',
     'certificate_number': (
         r'(?:certificate\s*(?:no\.?|number|id)|credential\s*id|cert\.?\s*(?:no\.?|#)|'
-        r'registration\s*(?:no\.?|number)|serial\s*(?:no\.?|number)|validation\s*number)'
-        rf'{SEP}(?P<v>[A-Z0-9][A-Z0-9\-/.]{{3,}})'
+        r'reg(?:istration)?\.?\s*(?:no\.?|number)|ref(?:erence)?\.?\s*(?:no\.?|number)|'
+        r'serial\s*(?:no\.?|number)|validation\s*number)'
+        rf'{SEP}(?P<v>[A-Z0-9][A-Z0-9\-/.()]{{3,}})'
     ),
-    'issued_date': rf'(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|awarded\s+on){SEP}(?P<v>{DATE})',
+    # Letters usually carry a plain "Date: ..." line
+    'issued_date': rf'(?:date\s+of\s+issue|issued\s+on|issue\s+date|date\s+issued|awarded\s+on|\bdated?\s*:){SEP}(?P<v>{DATE})',
     'expiry_date': rf'(?:valid\s+until|valid\s+till|valid\s+thr(?:u|ough)|expiry\s+date|expiration\s+date|expires(?:\s+on)?){SEP}(?P<v>{DATE})',
     # Explicit colon required: "completed the course" must not match as a label
     'subject': r'(?:^|\n)[ \t]*(?:subject|course|program(?:me)?|qualification)[ \t]*:[ \t]*(?P<v>[^\n]+)',
@@ -44,6 +46,21 @@ SUBJECT_LEADS = re.compile(
     re.IGNORECASE,
 )
 
+# Prose subject: "thesis titled X under the guidance ..." (run on whitespace-joined text)
+SUBJECT_TITLED = re.compile(
+    r'(?:thesis|dissertation|project|course|program(?:me)?|training|internship)\s+(?:titled|entitled)\s+'
+    r'["“]?(?P<v>[^"”]+?)["”]?(?=\s+(?:under|at|from|with|during|on\s+\d)\b|[.;]|$)',
+    re.IGNORECASE,
+)
+
+# Letterhead fallback for issuer: first organisation-like line near the top of the page
+ORG_WORDS = re.compile(
+    r'\b(?:institute|university|college|academy|school|board|council|ministry|department|foundation|'
+    r'corporation|company|ltd|limited|inc|llc|pvt|association|society|authority|organi[sz]ation)\b',
+    re.IGNORECASE,
+)
+LETTERHEAD_LINES = 8
+
 def _clean(value):
     value = re.sub(r'\s+', ' ', value).strip(' .,:;-')
     return value or None
@@ -54,6 +71,13 @@ def _subject_from_phrasing(lines):
             nxt = lines[i + 1].strip()
             if nxt:
                 return nxt
+    return None
+
+def _issuer_from_letterhead(lines):
+    for line in lines[:LETTERHEAD_LINES]:
+        line = line.strip()
+        if 5 <= len(line) <= 80 and ORG_WORDS.search(line) and not line.startswith('(') and ':' not in line:
+            return line
     return None
 
 def extract_with_rules(text_content):
@@ -68,11 +92,20 @@ def extract_with_rules(text_content):
         value = _clean(match.group('v')) if match else None
         result[field] = {'value': value, 'confidence': LABELLED_CONFIDENCE}
 
+    lines = [l for l in text.splitlines() if l.strip()]
+
     if result['subject']['value'] is None:
-        lines = [l for l in text.splitlines() if l.strip()]
         subject = _subject_from_phrasing(lines)
+        if not subject:
+            match = SUBJECT_TITLED.search(' '.join(text.split()))
+            subject = match.group('v') if match else None
         if subject:
             result['subject'] = {'value': _clean(subject), 'confidence': HEURISTIC_CONFIDENCE}
+
+    if result['issuer']['value'] is None:
+        issuer = _issuer_from_letterhead(lines)
+        if issuer:
+            result['issuer'] = {'value': _clean(issuer), 'confidence': HEURISTIC_CONFIDENCE}
 
     result['_method'] = 'rules'
     return result

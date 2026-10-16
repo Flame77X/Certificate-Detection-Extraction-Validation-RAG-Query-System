@@ -164,6 +164,17 @@ class TestRuleExtraction(unittest.TestCase):
         self.assertEqual(vals['certificate_number'], 'AB12-99')
         self.assertEqual(vals['expiry_date'], 'March 5, 2027')
 
+    def test_letter_format(self):
+        # Fictional institution: letterhead issuer, Ref.No., "Date:" line, "thesis titled ..." subject
+        text = ('NIT\nNorthfield Institute of Technology\n(Established under the Northfield Act)\n'
+                'Office of Research\nRef.No.:NIT/R(AR)/2024/L07\nDate: December 20, 2025\n'
+                'TO WHOMSOEVER IT MAY CONCERN\nThis is to certify that Ms. Jane Sample has submitted her\n'
+                'thesis titled Robust Solar Panel Coatings for\nHumid Climates under the guidance of Dr. Example.')
+        self.assertEqual(self.values(text), {
+            'issuer': 'Northfield Institute of Technology', 'certificate_number': 'NIT/R(AR)/2024/L07',
+            'issued_date': 'December 20, 2025', 'expiry_date': None,
+            'subject': 'Robust Solar Panel Coatings for Humid Climates'})
+
     def test_confidence_stays_below_flag_threshold(self):
         out = extract_with_rules('Issued By: IEEE')
         self.assertTrue(all(v['confidence'] < 0.8 for k, v in out.items() if k != '_method'))
