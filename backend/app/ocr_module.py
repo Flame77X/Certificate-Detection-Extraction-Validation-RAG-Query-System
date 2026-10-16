@@ -2,9 +2,9 @@ import os
 import base64
 import mimetypes
 from pypdf import PdfReader
-from openai import AzureOpenAI
 
 from app.security import validate_secure_path, check_file_size
+from app.llm_client import get_client, chat_deployment
 
 def extract_text_from_file(file_path):
     """
@@ -60,11 +60,10 @@ def extract_with_vision(file_path):
     """
     Use Azure OpenAI (GPT-4 Vision) to read text from an image.
     """
-    client = AzureOpenAI(
-        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
-        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
-    )
+    client = get_client()
+    if not client:
+        print("⚠️ Vision OCR skipped: Azure OpenAI is not configured.")
+        return ""
     
     # Determine MIME type
     mime_type, _ = mimetypes.guess_type(file_path)
@@ -76,10 +75,8 @@ def extract_with_vision(file_path):
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
 
     try:
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
-        
         response = client.chat.completions.create(
-            model=deployment,
+            model=chat_deployment(),
             messages=[
                 {
                     "role": "system",

@@ -1,13 +1,8 @@
 from datetime import datetime
 import json
 import os
-from openai import AzureOpenAI
 
-# Load env vars (already loaded by main.py)
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+from app.llm_client import get_client, chat_deployment
 
 from collections import Counter
 
@@ -16,32 +11,10 @@ def _extract_single(text_content):
     (Private) Single attempt to extract certificate fields using Azure OpenAI.
     """
     
-    # Check if we have usable keys
-    # Clean the endpoint if it contains the full path/query params
-    base_endpoint = AZURE_OPENAI_ENDPOINT
-    if base_endpoint:
-        if "/openai/deployments" in base_endpoint:
-             base_endpoint = base_endpoint.split("/openai/deployments")[0]
-        # Remove query params if any
-        if "?" in base_endpoint:
-            base_endpoint = base_endpoint.split("?")[0]
+    client = get_client()
 
-    has_real_config = (
-        AZURE_OPENAI_API_KEY and 
-        base_endpoint and
-        "your-key" not in str(AZURE_OPENAI_API_KEY)
-    )
-
-    if has_real_config:
+    if client:
         try:
-            # print(f"🧠 Sending text to Azure OpenAI ({AZURE_OPENAI_DEPLOYMENT})...") 
-            # (Silenced print to avoid spamming console during ensemble)
-            
-            client = AzureOpenAI(
-                azure_endpoint=base_endpoint, 
-                api_key=AZURE_OPENAI_API_KEY,  
-                api_version=AZURE_OPENAI_API_VERSION
-            )
 
             prompt = f"""
             You are a strict data extraction assistant. 
@@ -64,7 +37,7 @@ def _extract_single(text_content):
             """
 
             response = client.chat.completions.create(
-                model=AZURE_OPENAI_DEPLOYMENT,
+                model=chat_deployment(),
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that extracts data."},
                     {"role": "user", "content": prompt}

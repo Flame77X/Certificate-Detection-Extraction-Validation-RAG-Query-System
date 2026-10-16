@@ -1,5 +1,5 @@
 import chromadb
-from openai import AzureOpenAI
+from app.llm_client import get_client, chat_deployment, embedding_deployment
 import os
 import json
 from datetime import datetime
@@ -18,18 +18,11 @@ class CertificateRAG:
         )
         
         # Initialize Azure OpenAI - check for sanitized keys
-        raw_key = os.getenv('AZURE_OPENAI_API_KEY')
-        if not raw_key or "your-key" in str(raw_key):
-             print("⚠️  RAG Warning: Valid Azure API Key not found. RAG will not function correctly.")
-             self.client = None
-        else:
-            self.client = AzureOpenAI(
-                api_key=raw_key,
-                api_version=os.getenv('AZURE_OPENAI_API_VERSION', "2024-02-15-preview"),
-                azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
-            )
-            
-        self.deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4') 
+        self.client = get_client()
+        if not self.client:
+            print("⚠️  RAG Warning: Valid Azure API Key not found. RAG will not function correctly.")
+
+        self.deployment = chat_deployment()
         # Ideally use text-embedding-3-small, but checking availability. 
         # Fallback to simple deterministic embeddings if no model.
     
@@ -48,7 +41,7 @@ class CertificateRAG:
             # often typically deployed as same name.
             
             # Using a common default or Env variable would be best.
-            embedding_model = os.getenv("AZURE_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002")
+            embedding_model = embedding_deployment()
             
             response = self.client.embeddings.create(
                 input=text,
