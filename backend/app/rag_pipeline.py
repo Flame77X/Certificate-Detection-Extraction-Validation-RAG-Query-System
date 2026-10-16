@@ -1,5 +1,5 @@
 import chromadb
-from app.llm_client import get_client, chat_deployment, embedding_deployment
+from app.llm_client import get_client, get_chat_backend, embedding_deployment
 import os
 from datetime import datetime
 
@@ -35,8 +35,11 @@ class CertificateRAG:
         self.client = get_client()
         self.embedding_mode = _embedding_mode(self.client)
         self._local_ef = None
+        # Answers: Azure or Hugging Face chat model; without either, extractive answers
+        self.chat = get_chat_backend()
         if not self.client:
-            print("⚠️  RAG: Azure OpenAI not configured. Using local embeddings and extractive answers.")
+            answers = f"{self.chat.provider} answers" if self.chat else "extractive answers"
+            print(f"ℹ️  RAG: Azure OpenAI not configured. Using local embeddings and {answers}.")
 
         # Initialize Chroma (Persistent Storage)
         self.chroma_client = chromadb.PersistentClient(path=db_path)
@@ -46,7 +49,6 @@ class CertificateRAG:
             metadata={"hnsw:space": "cosine"}
         )
 
-        self.deployment = chat_deployment()
 
     def _local_embed(self, text):
         """Free, offline sentence embeddings (all-MiniLM-L6-v2 on ONNX, bundled with chromadb).
@@ -151,7 +153,7 @@ class CertificateRAG:
         )
 
     @staticmethod
-    def _extractive_answer(sources, metas, current_doc=False):
+    def _extractive_answer(sources, metas, current_doc=False, header=None):
         """Offline answer: list the retrieved records that are close enough to the question."""
         lines, kept = [], []
         distances = [s['distance'] for s in sources if s['distance'] is not None]
@@ -167,10 +169,10 @@ class CertificateRAG:
             kept.append(source)
         if not kept:
             return {"answer": "No certificate in the records closely matches that question.", "sources": []}
-        if current_doc:
-            header = "AI answers need Azure OpenAI. Here is what was extracted from this document:"
-        else:
-            header = "AI answers need Azure OpenAI, so here are the closest matching certificate records:"
+        if not header:
+            header = ("AI answers need Azure OpenAI or HF_TOKEN. Here is what was extracted from this document:"
+                      if current_doc else
+                      "AI answers need Azure OpenAI or HF_TOKEN, so here are the closest matching certificate records:")
         return {"answer": header + "\n" + "\n".join(lines), "sources": kept}
 
     def answer_question(self, question, doc_id=None):
@@ -204,14 +206,15 @@ class CertificateRAG:
         ]
 
         # 3a. No LLM: return the closest matching records verbatim instead of a generated answer
-        if not self.client:
-            metas = (results.get('metadatas') or [[{}] * len(context_docs)])[0]
-            return self._extractive_answer(sources, metas, current_doc=bool(doc_id) and sources[0]['distance'] is None)
+        metas = (results.get('metadatas') or [[{}] * len(context_docs)])[0]
+        current_doc = bool(doc_id) and sources[0]['distance'] is None
+        if not self.chat:
+            return self._extractive_answer(sources, metas, current_doc=current_doc)
 
         # 3b. Generate
         try:
-            response = self.client.chat.completions.create(
-                model=self.deployment,
+            response = self.chat.client.chat.completions.create(
+                model=self.chat.model,
                 messages=[
                     {"role": "system", "content": ANSWER_SYSTEM_PROMPT.format(today=datetime.now().date().isoformat())},
                     {"role": "user", "content": f"Certificate records:\n{context_text}\n\nQuestion: {question}"}
@@ -227,5 +230,10 @@ class CertificateRAG:
                     "sources": []
                 }
 
-            print(f"Server Error: {e}") # Log full error for admin
-            return {"answer": "I encountered an error processing that request. Please try again.", "sources": []}
+            print(f"Server Error ({self.chat.provider}): {e}") # Log full error for admin
+            # e.g. HF free credits exhausted (402) or rate limited (429): still show the matching records
+            status = getattr(e, 'status_code', None)
+            reason = f"HTTP {status}" if status else type(e).__name__
+            return self._extractive_answer(
+                sources, metas, current_doc=current_doc,
+                header=f"The {self.chat.provider} model is unavailable right now ({reason}). Closest matching records:")

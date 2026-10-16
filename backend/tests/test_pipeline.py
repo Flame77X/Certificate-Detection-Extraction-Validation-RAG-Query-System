@@ -331,6 +331,41 @@ class TestRAG(unittest.TestCase):
 
     def setUp(self):
         self.db_dir = tempfile.mkdtemp()
+        # No chat model unless a test provides one (ignores any real HF_TOKEN / Azure env)
+        patcher = mock.patch.object(rp, 'get_chat_backend', return_value=None)
+        self.get_chat_backend = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def local_embed(_self, text):
+        text = text.lower()
+        return [1.0 if 'cloud' in text else 0.05, 1.0 if 'learning' in text else 0.05, 0.1]
+
+    def offline_rag_with_chat(self, chat_client):
+        """Local embeddings (no Azure) + Hugging Face chat backend."""
+        self.get_chat_backend.return_value = llm_client.ChatBackend(chat_client, 'Qwen/test', 'huggingface')
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            rag.ingest_certificate({'doc_id': 'C1', 'final_status': 'Verified',
+                                    'fields': {'issuer': 'Ministry of Education', 'subject': 'Cloud Operations'}})
+            return rag, rag.answer_question('Which cloud certificate do I have?')
+
+    def test_huggingface_generates_answer_over_local_search(self):
+        rag, result = self.offline_rag_with_chat(fake_chat_client(['You have Cloud Operations [C1]']))
+        self.assertEqual(rag.collection.name, 'certificates_local')
+        self.assertEqual(result['answer'], 'You have Cloud Operations [C1]')
+        self.assertEqual(result['sources'][0]['doc_id'], 'C1')
+
+    def test_huggingface_failure_falls_back_to_records(self):
+        def create(**_kwargs):
+            err = RuntimeError('Payment required')
+            err.status_code = 402
+            raise err
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        _, result = self.offline_rag_with_chat(client)
+        self.assertIn('huggingface model is unavailable right now (HTTP 402)', result['answer'])
+        self.assertIn('Issuer: Ministry of Education', result['answer'])
 
     def tearDown(self):
         shutil.rmtree(self.db_dir, ignore_errors=True)
@@ -374,6 +409,7 @@ class TestRAG(unittest.TestCase):
             return SimpleNamespace(data=[SimpleNamespace(embedding=[1.0 if 'iso' in text else 0.01, 0.5])])
         client = fake_chat_client(['Expires 2026-01-15 [C2]'])
         client.embeddings = SimpleNamespace(create=embed)
+        self.get_chat_backend.return_value = llm_client.ChatBackend(client, 'gpt-4o', 'azure')
         with mock.patch.object(rp, 'get_client', return_value=client):
             rag = rp.CertificateRAG(db_path=self.db_dir)
             rag.ingest_certificate({'doc_id': 'C1', 'fields': {'issuer': 'AWS Training'}})
