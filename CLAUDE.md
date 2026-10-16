@@ -28,14 +28,15 @@ python backend/scripts/make_sample_certs.py                   # regenerate synth
 
 ## Environment
 
-`.env` is loaded by `batch_processor.py` (`app.py` and `main.py` get it by importing that module). `app/llm_client.py` reads env vars at call time and is the only place that builds the `AzureOpenAI` client. All variables are documented in `.env.example`; the key ones are:
+`.env` is loaded by `batch_processor.py` (`app.py` and `main.py` get it by importing that module). `app/llm_client.py` reads env vars at call time and is the only place that builds LLM clients. `get_client()` returns the Azure client, which is the only one that can do vision OCR and Azure embeddings. `get_chat_backend()` returns a `ChatBackend(client, model, provider)` for chat (extraction and RAG answers): Azure if configured, otherwise Hugging Face Inference Providers through the OpenAI-compatible router `https://router.huggingface.co/v1` using the plain `openai.OpenAI` client. All variables are documented in `.env.example`; the key ones are:
 - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT`: one chat deployment used for extraction, vision OCR and RAG answers, so it must accept image input.
 - `AZURE_EMBEDDING_DEPLOYMENT`
+- `HF_TOKEN`, `HF_MODEL` (default `Qwen/Qwen2.5-72B-Instruct`), `LLM_PROVIDER` (`auto`|`azure`|`huggingface`)
 - `OCR_PROVIDER` (`auto`|`azure`|`local`), `EXTRACTION_PROVIDER` (`auto`|`llm`|`rules`)
 - `USE_MOCK_LLM`, `EXTRACTION_ATTEMPTS`, `EXTRACTION_TEMPERATURE`, `FLASK_DEBUG`, `PORT`
 
-A key that is missing or contains "your-key" counts as "not configured". In that state, with the `auto` defaults, OCR uses local RapidOCR and extraction uses `app/rule_extraction.py` (or fixed mock data if `USE_MOCK_LLM=1`). RAG uses local all-MiniLM-L6-v2 embeddings (ChromaDB's ONNX default, downloaded to `~/.cache/chroma` on first use) in a separate `certificates_local` collection, and `/query` returns extractive answers (closest records) instead of LLM text. Every result carries `extraction_method` (`llm_consensus`, `rules` or `mock`).
+A key that is missing or contains "your-key" counts as "not configured". In that state, with the `auto` defaults, OCR uses local RapidOCR and extraction uses `app/rule_extraction.py` (or fixed mock data if `USE_MOCK_LLM=1`). RAG uses local all-MiniLM-L6-v2 embeddings (ChromaDB's ONNX default, downloaded to `~/.cache/chroma` on first use) in a separate `certificates_local` collection, and `/query` returns extractive answers (closest records) instead of LLM text. If `HF_TOKEN` is set, extraction and chat answers use the Hugging Face model instead of rules and extractive answers, while OCR and embeddings stay local. Every result carries `extraction_method` (`azure_consensus`, `huggingface_consensus`, `rules` or `mock`). If every LLM extraction run fails (for example HF 402 when credits are exhausted, or 429), extraction falls back to rules. If a chat call fails, `answer_question` falls back to `_extractive_answer` with the HTTP status in the header.
 
 ## Pipeline architecture
 
