@@ -176,9 +176,9 @@ class CertificateRAG:
         if not kept:
             return {"answer": "No certificate in the records closely matches that question.", "sources": []}
         if not header:
-            header = ("AI answers need Azure OpenAI or HF_TOKEN. Here is what was extracted from this document:"
+            header = ("AI answers need an AI provider key (see Settings). Here is what was extracted from this document:"
                       if current_doc else
-                      "AI answers need Azure OpenAI or HF_TOKEN, so here are the closest matching certificate records:")
+                      "AI answers need an AI provider key (see Settings), so here are the closest matching certificate records:")
         return {"answer": header + "\n" + "\n".join(lines), "sources": kept}
 
     def answer_question(self, question, doc_id=None):

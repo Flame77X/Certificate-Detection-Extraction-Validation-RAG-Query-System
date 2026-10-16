@@ -131,7 +131,7 @@ def calculate_consensus(results_list, total_runs=None):
 def extract_with_azure(text_content):
     """
     MAIN ENTRY. Engine selection (EXTRACTION_PROVIDER=auto|llm|rules, default auto):
-    - Chat model available (Azure, else Hugging Face via HF_TOKEN): self-consistency extraction,
+    - Chat model available (Azure, OpenRouter, custom or Hugging Face; see llm_client): self-consistency extraction,
       CONSENSUS_ATTEMPTS parallel runs, per-field majority vote, plus '_voting_debug' with vote counts.
     - No chat model: rule-based extraction (free/offline), or fixed mock data if USE_MOCK_LLM=1.
     - All LLM runs fail (e.g. HF credits exhausted): rule-based extraction.
@@ -141,7 +141,7 @@ def extract_with_azure(text_content):
     backend = None if provider == "rules" else get_chat_backend()
     if provider == "rules" or (not backend and not _mock_enabled()):
         if provider != "rules":
-            print("⚠️ No LLM configured (Azure OpenAI or HF_TOKEN). Using rule-based extraction.")
+            print("⚠️ No AI provider configured (see .env.example). Using rule-based extraction.")
         return extract_with_rules(text_content)
 
     engine = backend.provider if backend else 'mock'
