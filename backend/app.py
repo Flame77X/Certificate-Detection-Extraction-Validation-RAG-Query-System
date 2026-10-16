@@ -81,7 +81,8 @@ def query_rag():
     question = (data.get('question') or '').strip()
     if not question:
         return jsonify({'error': 'Field "question" is required.'}), 400
-    return jsonify(rag.answer_question(question))
+    # doc_id (optional): the document open in the UI, so 'this certificate' questions target it
+    return jsonify(rag.answer_question(question, doc_id=(data.get('doc_id') or None)))
 
 if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes')

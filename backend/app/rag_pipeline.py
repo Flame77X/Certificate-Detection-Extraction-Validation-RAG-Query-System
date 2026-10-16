@@ -125,11 +125,21 @@ class CertificateRAG:
 
         return {"success": True, "doc_id": doc_id}
 
-    def query(self, question, n_results=3):
-        """Query certificates using natural language. Returns Chroma results, or None if unavailable."""
+    def query(self, question, n_results=3, doc_id=None):
+        """
+        Query certificates using natural language. Returns Chroma results, or None if unavailable.
+        With doc_id (the document open in the UI), return that record directly so questions like
+        "what is this certificate?" are answered about it; falls back to search if it is not indexed.
+        """
         count = self.collection.count()
         if count == 0:
             return None
+
+        if doc_id:
+            record = self.collection.get(ids=[doc_id], include=['documents', 'metadatas'])
+            if record['ids']:
+                return {'ids': [record['ids']], 'documents': [record['documents']],
+                        'metadatas': [record['metadatas']], 'distances': [[None] * len(record['ids'])]}
 
         q_embedding = self.get_embeddings(question)
         if q_embedding is None:
@@ -141,7 +151,7 @@ class CertificateRAG:
         )
 
     @staticmethod
-    def _extractive_answer(sources, metas):
+    def _extractive_answer(sources, metas, current_doc=False):
         """Offline answer: list the retrieved records that are close enough to the question."""
         lines, kept = [], []
         distances = [s['distance'] for s in sources if s['distance'] is not None]
@@ -157,10 +167,13 @@ class CertificateRAG:
             kept.append(source)
         if not kept:
             return {"answer": "No certificate in the records closely matches that question.", "sources": []}
-        header = "AI answers need Azure OpenAI, so here are the closest matching certificate records:"
+        if current_doc:
+            header = "AI answers need Azure OpenAI. Here is what was extracted from this document:"
+        else:
+            header = "AI answers need Azure OpenAI, so here are the closest matching certificate records:"
         return {"answer": header + "\n" + "\n".join(lines), "sources": kept}
 
-    def answer_question(self, question):
+    def answer_question(self, question, doc_id=None):
         """
         Generate a grounded answer from retrieved certificate records.
         Returns {"answer": str, "sources": [{"doc_id", "issuer", "status", "distance"}]}.
@@ -169,7 +182,7 @@ class CertificateRAG:
             return {"answer": "No certificates have been ingested yet.", "sources": []}
 
         # 1. Retrieve
-        results = self.query(question)
+        results = self.query(question, doc_id=doc_id)
         if not results or not results['documents'] or not results['documents'][0]:
             return {"answer": "No relevant certificates found in the database.", "sources": []}
 
@@ -193,7 +206,7 @@ class CertificateRAG:
         # 3a. No LLM: return the closest matching records verbatim instead of a generated answer
         if not self.client:
             metas = (results.get('metadatas') or [[{}] * len(context_docs)])[0]
-            return self._extractive_answer(sources, metas)
+            return self._extractive_answer(sources, metas, current_doc=bool(doc_id) and sources[0]['distance'] is None)
 
         # 3b. Generate
         try:

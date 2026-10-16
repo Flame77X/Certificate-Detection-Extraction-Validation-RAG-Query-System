@@ -333,6 +333,14 @@ class TestRAG(unittest.TestCase):
         self.assertEqual([s['doc_id'] for s in result['sources']], ['C1'])
         self.assertIn('Issuer: Ministry of Education', result['answer'])
 
+        # Question about the open document returns that record even when wording doesn't match it
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', fake_local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            result = rag.answer_question('What is this certificate?', doc_id='C2')
+        self.assertEqual([s['doc_id'] for s in result['sources']], ['C2'])
+        self.assertIn('Subject: Machine Learning', result['answer'])
+
     def test_answer_includes_sources(self):
         def embed(**kwargs):
             text = kwargs['input'].lower()
@@ -397,8 +405,9 @@ class TestFlaskAPI(unittest.TestCase):
 
     def test_query_returns_answer_and_sources(self):
         self.server.rag.answer_question.return_value = {'answer': 'A', 'sources': [{'doc_id': 'C1'}]}
-        res = self.client.post('/query', json={'question': 'who issued C1?'})
+        res = self.client.post('/query', json={'question': 'who issued C1?', 'doc_id': 'C1'})
         self.assertEqual(res.json, {'answer': 'A', 'sources': [{'doc_id': 'C1'}]})
+        self.server.rag.answer_question.assert_called_with('who issued C1?', doc_id='C1')
 
 
 if __name__ == '__main__':

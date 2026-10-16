@@ -219,7 +219,10 @@
             }
         }
 
+        let currentDocId = null;
+
         function renderResults(data) {
+            currentDocId = data.doc_id;
             document.getElementById('resultsArea').classList.remove('hidden');
             document.getElementById('dropZone').classList.add('compact'); // Shrink upload area
 
@@ -329,7 +332,7 @@
             const res = await fetch('/query', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: val })
+                body: JSON.stringify({ question: val, doc_id: currentDocId })
             });
             const data = await res.json();
 
