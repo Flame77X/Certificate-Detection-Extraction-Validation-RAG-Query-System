@@ -211,7 +211,7 @@
                         <td>${escapeHtml(r.issued_date || '-')}</td>
                         <td>${escapeHtml(r.expiry_date || '-')}</td>
                         <td><span class="${escapeHtml((r.status || '').toLowerCase().replace(/ /g, '-'))}">${escapeHtml(r.status || '-')}</span></td>
-                        <td>${r.ingested_at ? escapeHtml(new Date(r.ingested_at).toLocaleString()) : '-'}</td>
+                        <td>${r.ingested_at ? escapeHtml(new Date(r.ingested_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })) : '-'}</td>
                     </tr>`).join('');
             } catch (e) {
                 rows.innerHTML = '<tr><td colspan="7" class="muted">Could not load history.</td></tr>';
