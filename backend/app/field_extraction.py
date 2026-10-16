@@ -153,7 +153,8 @@ def calculate_consensus(results_list):
         winner_conf = 0.0
         for res in results_list:
             if res and key in res:
-                if str(res[key].get('value')) == safe_values[0] or (res[key].get('value') is None and safe_values[0] == "None"):
+                val = res[key].get('value')
+                if (str(val) if val is not None else "None") == winner_val_str:
                    winner_conf = res[key].get('confidence', 0.0)
                    break
                    
