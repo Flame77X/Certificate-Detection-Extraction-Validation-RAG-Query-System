@@ -388,6 +388,16 @@ class TestRAG(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.db_dir, ignore_errors=True)
 
+    def test_list_certificates_newest_first(self):
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            rag.ingest_certificate({'doc_id': 'OLD', 'fields': {'issuer': 'A'}})
+            rag.ingest_certificate({'doc_id': 'NEW', 'fields': {'issuer': 'B'}})
+            items = rag.list_certificates()
+        self.assertEqual([i['doc_id'] for i in items], ['NEW', 'OLD'])
+        self.assertEqual(items[0]['issuer'], 'B')
+
     def test_forced_azure_without_client_indexes_nothing(self):
         with mock.patch.object(rp, 'get_client', return_value=None), \
              mock.patch.dict(os.environ, {'RAG_EMBEDDINGS': 'azure'}):
@@ -480,6 +490,22 @@ class TestFlaskAPI(unittest.TestCase):
     def test_oversized_upload_returns_413(self):
         too_big = b'0' * (self.server.MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
         self.assertEqual(self.upload('big.pdf', too_big).status_code, 413)
+
+    def test_history_lists_indexed_certificates(self):
+        self.server.rag.list_certificates.return_value = [{'doc_id': 'C1', 'issuer': 'IEEE', 'status': 'Verified'}]
+        res = self.client.get('/history')
+        self.assertEqual(res.json, {'items': [{'doc_id': 'C1', 'issuer': 'IEEE', 'status': 'Verified'}]})
+
+    def test_settings_reports_config_without_secrets(self):
+        self.server.rag.embedding_mode = 'local'
+        self.server.rag.collection.count.return_value = 2
+        env = {'HF_TOKEN': 'hf_secretvalue123', 'AZURE_OPENAI_API_KEY': '', 'LLM_PROVIDER': ''}
+        with mock.patch.dict(os.environ, env):
+            res = self.client.get('/settings')
+        self.assertEqual(res.json['llm']['provider'], 'huggingface')
+        self.assertEqual(res.json['indexed_certificates'], 2)
+        self.assertIn('IEEE', res.json['trusted_issuers'])
+        self.assertNotIn('hf_secretvalue123', res.get_data(as_text=True))
 
     def test_query_requires_question(self):
         self.assertEqual(self.client.post('/query', json={}).status_code, 400)

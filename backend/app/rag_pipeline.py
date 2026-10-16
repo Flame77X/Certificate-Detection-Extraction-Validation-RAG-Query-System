@@ -85,6 +85,12 @@ class CertificateRAG:
             print("   (Ensure you have an embedding model deployed and AZURE_EMBEDDING_DEPLOYMENT set)")
             return None
 
+    def list_certificates(self):
+        """All indexed certificates (metadata only), newest first. Used by the History view."""
+        records = self.collection.get(include=['metadatas'])
+        items = [{'doc_id': doc_id, **(meta or {})} for doc_id, meta in zip(records['ids'], records['metadatas'])]
+        return sorted(items, key=lambda r: r.get('ingested_at', ''), reverse=True)
+
     def ingest_certificate(self, cert_data):
         """
         Add extracted certificate to vector database.

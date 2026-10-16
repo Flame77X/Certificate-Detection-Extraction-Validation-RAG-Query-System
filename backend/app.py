@@ -1,9 +1,12 @@
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
+import json
 import os
 from batch_processor import process_single_file
 from app.rag_pipeline import CertificateRAG
 from app.security import MAX_FILE_SIZE_MB
+from app.llm_client import get_chat_backend, is_configured
+from app.field_extraction import CONSENSUS_ATTEMPTS
 
 # Configure Flask to look for frontend in sibling directory
 app = Flask(__name__,
@@ -72,6 +75,35 @@ def upload_file():
 @app.errorhandler(413)
 def file_too_large(_e):
     return jsonify({'success': False, 'error': f'File too large. Limit is {MAX_FILE_SIZE_MB}MB'}), 413
+
+@app.route('/history', methods=['GET'])
+def history():
+    """Certificates stored in the RAG index, newest first."""
+    if not rag:
+        return jsonify({'items': []})
+    return jsonify({'items': rag.list_certificates()})
+
+@app.route('/settings', methods=['GET'])
+def settings():
+    """Effective configuration (read-only). Never includes keys or tokens."""
+    chat = get_chat_backend()
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trusted_issuers.json')) as f:
+            trusted = json.load(f).get('trusted_issuers', [])
+    except (OSError, ValueError):
+        trusted = []
+    return jsonify({
+        'llm': {'provider': chat.provider if chat else 'none', 'model': chat.model if chat else None},
+        'extraction': 'rules' if (os.getenv('EXTRACTION_PROVIDER') or 'auto').lower() == 'rules' or not chat
+                      else f'{chat.provider} consensus x{CONSENSUS_ATTEMPTS}',
+        'ocr': 'azure vision' if (is_configured() and (os.getenv('OCR_PROVIDER') or 'auto').lower() != 'local')
+               else 'local (RapidOCR)',
+        'embeddings': ('azure' if rag and rag.embedding_mode == 'azure' else 'local (all-MiniLM-L6-v2)') if rag else 'offline',
+        'indexed_certificates': rag.collection.count() if rag else 0,
+        'trusted_issuers': trusted,
+        'max_file_size_mb': MAX_FILE_SIZE_MB,
+        'allowed_extensions': sorted(ALLOWED_EXTENSIONS),
+    })
 
 @app.route('/query', methods=['POST'])
 def query_rag():
