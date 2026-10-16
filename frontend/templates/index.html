@@ -57,7 +57,7 @@
                             <p>Drag & drop PDF or Image</p>
                             <button class="btn-primary" onclick="document.getElementById('fileInput').click()">Browse
                                 Files</button>
-                            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg" hidden>
+                            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" hidden>
                         </div>
                         <div id="uploadLoader" class="loader-overlay hidden">
                             <div class="spinner"></div>
@@ -140,6 +140,18 @@
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
 
+        // Extracted fields and LLM answers are untrusted: escape before inserting as HTML
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Escape first, then allow only **bold** from the model's markdown
+        function renderAnswer(text) {
+            return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        }
+
         // --- Drag & Drop ---
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
@@ -217,8 +229,8 @@
                 if (!field) continue;
                 grid.innerHTML += `
                     <div class="field-box card glass-sm">
-                        <span class="label">${key.replace('_', ' ')}</span>
-                        <div class="value">${field}</div>
+                        <span class="label">${escapeHtml(key.replace(/_/g, ' '))}</span>
+                        <div class="value">${escapeHtml(field)}</div>
                         <div class="confidence-dot" style="opacity: ${data.confidence[key]}"></div>
                     </div>
                 `;
@@ -238,21 +250,14 @@
                     <i data-lucide="scan"></i> 
                     <div>
                         <strong>Deep Scan Analysis</strong>
-                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">OCR Precision: ${confPercent}% (High Fidelity)</div>
-                    </div>
-                </li>
-                <li class="success">
-                    <i data-lucide="fingerprint"></i> 
-                    <div>
-                        <strong>Digital Forgery Check</strong>
-                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Pixel & Metadata Analysis: No tampering detected.</div>
+                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Extraction confidence (avg): ${confPercent}%</div>
                     </div>
                 </li>
                 <li class="${isIssuerValid ? 'success' : 'warning'}">
-                    <i data-lucide="${isIssuerValid ? 'database' : 'alert-triangle'}"></i> 
+                    <i data-lucide="${isIssuerValid ? 'database' : 'alert-triangle'}"></i>
                     <div>
                         <strong>Registry Cross-Reference</strong>
-                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Issuer Status: ${data.issuer_validation.status}</div>
+                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Issuer Status: ${escapeHtml(data.issuer_validation.status)}</div>
                     </div>
                 </li>
                 <li class="${data.validation.dates_consistent ? 'success' : 'warning'}">
@@ -281,7 +286,7 @@
             if (!val) return;
 
             // User Msg
-            history.innerHTML += `<div class="msg user"><div class="bubble">${val}</div></div>`;
+            history.innerHTML += `<div class="msg user"><div class="bubble">${escapeHtml(val)}</div></div>`;
             input.value = '';
             history.scrollTop = history.scrollHeight;
 
@@ -296,7 +301,7 @@
             history.innerHTML += `
                 <div class="msg ai">
                     <div class="avatar-ai"><i data-lucide="bot"></i></div>
-                    <div class="bubble">${data.answer}</div>
+                    <div class="bubble">${renderAnswer(data.answer || data.error)}</div>
                 </div>
             `;
             history.scrollTop = history.scrollHeight;
