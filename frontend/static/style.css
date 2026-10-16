@@ -290,6 +290,63 @@ iframe {
     color: var(--warning);
 }
 
+.expired,
+.untrusted-issuer,
+.verification-failed {
+    color: var(--danger);
+}
+
+/* Trust ring colour follows average extraction confidence (set in JS) */
+.circular-chart.amber .circle {
+    stroke: var(--warning);
+}
+
+.circular-chart.red .circle {
+    stroke: var(--danger);
+}
+
+/* --- FORENSIC LOG --- */
+.validation-log h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#validationSteps {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+#validationSteps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+#validationSteps li > svg {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-top: 2px;
+}
+
+#validationSteps li.success > svg {
+    color: var(--success);
+}
+
+#validationSteps li.warning > svg {
+    color: var(--warning);
+}
+
+.field-box .value.missing {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 .trust-score {
     width: 60px;
     height: 60px;

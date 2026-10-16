@@ -30,7 +30,7 @@
             </div>
 
             <div class="user-profile">
-                <div class="avatar">RA</div>
+                <div class="avatar">DU</div>
                 <div class="user-info">
                     <span class="name">Demo User</span>
                     <span class="role">Admin</span>
@@ -86,14 +86,14 @@
                             <span class="label">Validation Status</span>
                             <div class="status-badge-lg" id="mainStatusBadge">VERIFIED</div>
                         </div>
-                        <div class="trust-score">
-                            <svg viewBox="0 0 36 36" class="circular-chart green">
+                        <div class="trust-score" title="Average extraction confidence">
+                            <svg viewBox="0 0 36 36" class="circular-chart green" id="scoreChart">
                                 <path class="circle-bg"
                                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                                <path class="circle" stroke-dasharray="98, 100"
+                                <path class="circle" id="scoreArc" stroke-dasharray="0, 100"
                                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
                             </svg>
-                            <span class="score-text">98%</span>
+                            <span class="score-text" id="scoreText">--</span>
                         </div>
                     </div>
 
@@ -231,12 +231,15 @@
             // Fields
             const grid = document.getElementById('fieldsGrid');
             grid.innerHTML = '';
-            for (const [key, field] of Object.entries(data.fields)) {
-                if (!field) continue;
+            // Fixed order (Flask's jsonify sorts keys); show missing fields instead of hiding them
+            const FIELD_ORDER = ['issuer', 'subject', 'certificate_number', 'issued_date', 'expiry_date'];
+            for (const key of FIELD_ORDER) {
+                const field = data.fields[key];
+                const missingLabel = key === 'expiry_date' ? 'No expiry' : 'Not found';
                 grid.innerHTML += `
                     <div class="field-box card glass-sm">
                         <span class="label">${escapeHtml(key.replace(/_/g, ' '))}</span>
-                        <div class="value">${escapeHtml(field)}</div>
+                        <div class="value${field ? '' : ' missing'}">${field ? escapeHtml(field) : missingLabel}</div>
                         <div class="confidence-dot" style="opacity: ${data.confidence[key]}"></div>
                     </div>
                 `;
@@ -249,10 +252,27 @@
             // Calculate Confidence
             const avgConf = Object.values(data.confidence).reduce((a, b) => a + b, 0) / Object.values(data.confidence).length;
             const confPercent = Math.round(avgConf * 100);
+
+            // Date check summary from validate_dates()
+            const v = data.validation || {};
+            const EXPIRY_TEXT = { valid: 'Not expired', expired: 'Expired', no_expiry: 'No expiry date', invalid_format: 'Dates missing or unreadable' };
+            const dateOk = v.dates_consistent && v.issued_date_valid && v.expiry_status !== 'expired' && v.expiry_status !== 'invalid_format';
+            const parsed = v.expiry_status !== 'invalid_format';
+            const dateSummary = [
+                EXPIRY_TEXT[v.expiry_status] || 'Unknown',
+                parsed && v.issued_date_valid === false ? 'issued date in the future' : null,
+                parsed && v.dates_consistent === false ? 'issued after expiry' : null,
+            ].filter(Boolean).join(' · ');
+
+            // Trust ring = average extraction confidence (green >= 80, amber >= 70, red below)
+            document.getElementById('scoreArc').setAttribute('stroke-dasharray', `${confPercent}, 100`);
+            document.getElementById('scoreText').innerText = `${confPercent}%`;
+            document.getElementById('scoreChart').setAttribute('class',
+                'circular-chart ' + (confPercent >= 80 ? 'green' : confPercent >= 70 ? 'amber' : 'red'));
             const timeString = new Date().toLocaleTimeString();
 
             steps.innerHTML = `
-                <li class="success">
+                <li class="${confPercent >= 80 ? 'success' : 'warning'}">
                     <i data-lucide="scan"></i> 
                     <div>
                         <strong>Deep Scan Analysis</strong>
@@ -275,11 +295,11 @@
                         ${data.external_verification.verification_url ? `<div style="font-size:0.8em; color:var(--text-muted); word-break:break-all;">${escapeHtml(data.external_verification.verification_url)}</div>` : ''}
                     </div>
                 </li>` : ''}
-                <li class="${data.validation.dates_consistent ? 'success' : 'warning'}">
-                    <i data-lucide="calendar-check"></i> 
+                <li class="${dateOk ? 'success' : 'warning'}">
+                    <i data-lucide="calendar-check"></i>
                     <div>
                         <strong>Temporal Logic Validation</strong>
-                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Consistency Check: Completed at ${timeString}</div>
+                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">${escapeHtml(dateSummary)} · checked at ${timeString}</div>
                     </div>
                 </li>
             `;
