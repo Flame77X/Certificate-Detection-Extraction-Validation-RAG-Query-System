@@ -8,65 +8,57 @@ Certificate Intelligence & Verification System: a Flask app plus CLI/batch tools
 
 ## Commands
 
-Run everything from `backend/`. Several paths are resolved relative to the current working directory (see "CWD-sensitive paths" below), so running from the repo root silently breaks file validation and writes logs to the wrong place.
+Paths are anchored to `backend/` (see `app/security.py: BACKEND_DIR`), so commands work from the repo root or from `backend/`.
 
 ```bash
-cd backend
-pip install -r requirements.txt flask chromadb requests   # requirements.txt only lists openai, python-dotenv, pypdf
-python app.py                                  # Flask UI + API on http://localhost:5000
-python main.py --file data/sample_certificate.txt          # single-file CLI
-python batch_processor.py --csv data/batch_test.csv        # batch (flag is --csv, not --input as README says)
-python tests/test_suite.py                     # unit tests (unittest)
-python -m unittest tests.test_suite.TestCertificateSystem.test_date_validation   # single test
-python test_rag.py                             # RAG smoke test (needs Azure keys)
-python test_ai_connection.py                   # hits /query on a running server
+pip install -r backend/requirements.txt
+python backend/app.py                                         # Flask UI + API on http://localhost:5000 (FLASK_DEBUG=1 for debug)
+python backend/main.py --file backend/data/sample_certificate.txt
+python backend/batch_processor.py --csv backend/data/batch_test.csv
+cd backend && python -m unittest discover -s tests -p "test_*.py"            # all tests (Azure is mocked)
+cd backend && python -m unittest tests.test_pipeline.TestConsensus           # one class
+cd backend && python -m unittest tests.test_pipeline.TestFlaskAPI.test_query_requires_question  # one test
+USE_MOCK_LLM=1 python backend/main.py                         # offline run with fixed mock extraction
 ```
 
-- `requirements.lock` at the root is a UTF-16 `pip freeze` of a whole environment, not a curated lockfile.
 - There is no linter or formatter configured.
+- `requirements.lock` at the root is a UTF-16 `pip freeze` of a whole dev environment, not a curated lockfile. `backend/requirements.txt` is the source of truth.
+- `backend/app.py` cannot be imported as `app`, because the `backend/app/` package shadows it. Tests load it with `importlib.util.spec_from_file_location` (see `TestFlaskAPI`).
 
 ## Environment
 
-`.env` is loaded through `python-dotenv` in `main.py` / `batch_processor.py` (`app.py` gets it by importing `batch_processor`). Variables the code actually reads:
-- `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION` (default `2024-02-15-preview`)
-- `AZURE_OPENAI_DEPLOYMENT` (default `gpt-4`): used for extraction, vision OCR and RAG answers. The README calls it `AZURE_OPENAI_DEPLOYMENT_NAME`, which is wrong.
-- `AZURE_EMBEDDING_DEPLOYMENT` (default `text-embedding-ada-002`)
+`.env` is loaded by `batch_processor.py` (`app.py` and `main.py` get it by importing that module). `app/llm_client.py` reads env vars at call time and is the only place that builds the `AzureOpenAI` client. All variables are documented in `.env.example`; the key ones are:
+- `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT`: one chat deployment used for extraction, vision OCR and RAG answers, so it must accept image input.
+- `AZURE_EMBEDDING_DEPLOYMENT`
+- `USE_MOCK_LLM`, `EXTRACTION_ATTEMPTS`, `EXTRACTION_TEMPERATURE`, `FLASK_DEBUG`, `PORT`
 
-The `AZURE_VISION_*` / `AZURE_DOCUMENT_INTELLIGENCE_*` variables in the README and `.env.example` are not read anywhere. OCR for images and scanned PDFs uses GPT-4 vision through the same Azure OpenAI client (`app/ocr_module.py`).
+A key that is missing or contains "your-key" counts as "not configured". In that state, extraction returns `{}` (all fields null, so the status is Manual Review Required) unless `USE_MOCK_LLM=1`, vision OCR returns empty text, and the RAG store indexes nothing.
 
 ## Pipeline architecture
 
-The canonical pipeline is `process_single_file()` in `backend/batch_processor.py`. `app.py` (`POST /upload`) calls it directly. `main.py` keeps its own copy of the same steps, so a change to the pipeline must be made in both places.
+`process_single_file()` in `backend/batch_processor.py` is the single pipeline. `app.py` (`POST /upload`), `main.py` and the batch runner all call it.
 
-1. `ocr_module.extract_text_from_file`: calls `security.validate_secure_path` and `check_file_size` first. Then txt is read directly, PDFs go through `pypdf`, and images or PDFs with no text go to GPT-4 vision.
+1. `ocr_module.extract_text_from_file`: runs `security.validate_secure_path` (the file must resolve inside `backend/data/`) and `check_file_size` (10 MB). Then txt is read directly and PDFs go through `pypdf`. A PDF with fewer than 50 characters of text is treated as scanned: its embedded page images (first 3 pages) go to vision OCR. Images go straight to vision OCR.
 2. `certificate_identification.is_certificate(ext, text)`: keyword/heuristic classifier. If it returns false, the pipeline returns `None`, which `/upload` turns into a 400.
-3. `field_extraction.extract_with_azure`: self-consistency step that calls `_extract_single` 3 times and takes a majority vote per field (`calculate_consensus`). It returns `{field: {value, confidence}}` plus a `_voting_debug` key. **If no real key is configured (missing, or containing "your-key"), `_extract_single` returns hard-coded mock ISO data**, so tests and demos run offline but return fake extractions.
-4. `extract_fields` flattens the result into `fields` / `confidence` dicts and normalises dates to `YYYY-MM-DD` (`normalize_date`).
-5. `date_validation.validate_dates` checks issued < expiry, that the issued date is not in the future, and the expiry status. `validate_issuer` checks against `backend/trusted_issuers.json`.
-6. `logging_utils.check_for_issues` produces `LOW_CONFIDENCE_<FIELD>` (per-field confidence below 0.80) and `MISSING_<FIELD>` flags. `log_extraction` appends JSONL to `extraction_logs.json` after PII redaction (`security.redact_pii`).
+3. `field_extraction.extract_with_azure`: self-consistency step. It runs `EXTRACTION_ATTEMPTS` (default 3) calls to `_extract_single` in parallel, using JSON mode (with a fallback for deployments that reject `response_format`) and input capped at 12k characters. `calculate_consensus` takes a majority vote per field, ignoring case and whitespace. **Confidence = winning votes / total attempts.** A null winner gets 0.0, and failed runs lower the confidence. The output is `{field: {value, confidence}}` plus `_voting_debug`.
+4. `extract_fields` flattens that into `fields` / `confidence` and normalises dates to `YYYY-MM-DD`.
+5. `date_validation.validate_dates` checks consistency, that the issued date is not in the future, and expiry. `validate_issuer` checks against `backend/trusted_issuers.json` after normalising (casefold, punctuation, legal suffixes such as "Pvt Ltd") with a strict `SequenceMatcher` threshold of 0.92. It returns `matched_issuer` and `match_score`.
+6. `logging_utils.check_for_issues` raises `MISSING_<F>` and `LOW_CONFIDENCE_<F>` (below 0.80) flags. `log_extraction` appends PII-redacted JSONL to `backend/extraction_logs.json`.
 7. `status_assignment.assign_certificate_status` applies its checks in a fixed order: average confidence < 0.7 gives Manual Review Required, then untrusted issuer gives Untrusted Issuer, then Expired, then missing critical fields gives Manual Review, then an invalid issued date gives Verification Failed, otherwise Verified.
-8. "Task 7" `external_verification.verify_external_issuer` runs only when the issuer is untrusted. It is **simulated**: issuers matching a hard-coded registry (AWS/Microsoft/Coursera) with a cert number longer than 5 characters return "Verified (External API)", and no HTTP call is made. Its result can override `final_status`.
-9. In `app.py` only, the output is upserted into ChromaDB (`rag_pipeline.CertificateRAG.ingest_certificate`) with `doc_id` = the filename stem as the vector ID, so re-uploading a file with the same name overwrites the earlier entry.
+8. `external_verification.verify_external_issuer` runs only for untrusted issuers and is **simulated**: an AWS/Microsoft/Coursera name match plus a cert number longer than 5 characters gives "Verified (External API)", and no HTTP call is made. It can override `final_status`.
+9. In `app.py` only, the result is upserted into ChromaDB with `doc_id` = the sanitised filename stem, so re-uploading the same name overwrites the earlier entry.
 
-The output JSON contract (`create_json_output` plus `validation`, `issuer_validation`, `external_verification`, `final_status`) is what `frontend/templates/index.html` renders. Keep these keys stable or update the inline JS in that template.
+The output JSON contract (`create_json_output` plus `validation`, `issuer_validation`, `external_verification`, `final_status`) is rendered by the inline JS in `frontend/templates/index.html`. That JS must escape every model or extracted value with `escapeHtml` / `renderAnswer`.
 
 ## RAG
 
-- `app/rag_pipeline.py`: `chromadb.PersistentClient` at `backend/data/chroma_db` (anchored to the module file, so it does not depend on the CWD), collection `certificates`, cosine distance. The DB files are committed to git.
-- Without a key, embeddings fall back to a constant `[0.1]*1536` vector, and to `[0.0]*1536` on embedding errors. Retrieval is meaningless in both cases, but nothing raises.
-- `POST /query {question}` calls `answer_question`, which retrieves the top 3 documents and asks GPT-4 to answer from them.
+- `app/rag_pipeline.py`: `chromadb.PersistentClient` at `backend/data/chroma_db` (gitignored; the constructor takes `db_path` for tests), collection `certificates`, cosine distance.
+- `get_embeddings` returns `None` when embeddings are unavailable. Ingestion then skips the certificate and returns `success: False`, and queries return no sources. Placeholder vectors are never stored.
+- `POST /query {question}` calls `answer_question`, which returns `{answer, sources: [{doc_id, issuer, status, distance}]}`. The prompt includes today's date (for expiry questions) and asks for `[doc_id]` citations, with temperature 0.
 
-## CWD-sensitive paths
+## Gotchas
 
-- `security.ALLOWED_DATA_DIR = os.path.abspath('data')` is evaluated at import time. Every processed file must sit under `<cwd>/data`, otherwise `validate_secure_path` raises `PermissionError`. This is why the server must be started from `backend/`.
-- `app.py` saves uploads to `data/uploads` (relative to the CWD) using the raw `file.filename`. `secure_filename` is not used, although the README claims it is.
-- `logging_utils.LOG_FILE = 'extraction_logs.json'` is relative to the CWD. This explains the stray copies at the repo root (`extraction_logs.json`, `batch_results.json`) next to `backend/extraction_logs.json`.
-- The size limit is `MAX_FILE_SIZE_MB = 10` and the batch cap is `MAX_BATCH_SIZE = 50`, both in `app/security.py`. The README's "50 MB in app.py" is wrong.
-
-## Tests
-
-`backend/tests/test_suite.py` covers only the pure functions (identification, date validation, date normalisation, issue flags), and it puts `backend/` on `sys.path` itself. It does not exercise Flask, OCR, Azure or RAG. `test_rag.py` and `test_ai_connection.py` are manual scripts, not unittest cases.
-
-## Docs
-
-The root `*.md` files (security audits, viva prep, demo walkthrough, training strategy) are project/assignment write-ups and are not kept in sync with the code. Treat the code as the source of truth when they disagree.
+- Generated files are gitignored and untracked: `extraction_logs.json`, `batch_results.json`, `backend/data/chroma_db/` and the uploads folders. The sample certificates in `backend/data/` are still tracked.
+- Changing the meaning of confidence affects two thresholds together: 0.80 for flags in `logging_utils` and 0.7 average for status in `status_assignment`.
+- The root `*.md` files (security audits, viva prep, demo walkthrough, training strategy) are assignment write-ups that are not kept in sync with the code. Treat the code as the source of truth.
