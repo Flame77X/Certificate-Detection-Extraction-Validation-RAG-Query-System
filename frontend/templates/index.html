@@ -266,6 +266,15 @@
                         <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Issuer Status: ${escapeHtml(data.issuer_validation.status)}</div>
                     </div>
                 </li>
+                ${data.external_verification ? `
+                <li class="${data.external_verification.status.includes('Verified') ? 'success' : 'warning'}">
+                    <i data-lucide="${data.external_verification.status.includes('Verified') ? 'shield-check' : 'alert-triangle'}"></i>
+                    <div>
+                        <strong>External Verification</strong>
+                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">${escapeHtml(data.external_verification.status)}: ${escapeHtml(data.external_verification.reason)}</div>
+                        ${data.external_verification.verification_url ? `<div style="font-size:0.8em; color:var(--text-muted); word-break:break-all;">${escapeHtml(data.external_verification.verification_url)}</div>` : ''}
+                    </div>
+                </li>` : ''}
                 <li class="${data.validation.dates_consistent ? 'success' : 'warning'}">
                     <i data-lucide="calendar-check"></i> 
                     <div>

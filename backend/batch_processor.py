@@ -86,7 +86,7 @@ def process_single_file(file_path):
     
     if final_status == "Untrusted Issuer" or issuer_validation['status'] == 'Untrusted Issuer':
         print("🔍 Internal validation failed. Attempting Task 7: External Verification...")
-        external_stats = verify_external_issuer(fields.get('issuer'), fields)
+        external_stats = verify_external_issuer(fields.get('issuer'), fields, text_content)
         
         # Override final status if external check returned a decisive status
         if "Verified" in external_stats['status']:

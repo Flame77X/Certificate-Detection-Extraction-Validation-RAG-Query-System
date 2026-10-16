@@ -14,6 +14,7 @@ sys.path.append(BACKEND_DIR)
 from app import field_extraction as fe
 from app import rag_pipeline as rp
 from app import ocr_module
+from app import external_verification as ev
 from app.rule_extraction import extract_with_rules
 from app.date_validation import validate_dates, validate_issuer, normalize_issuer
 from app.logging_utils import check_for_issues
@@ -166,6 +167,77 @@ class TestRuleExtraction(unittest.TestCase):
     def test_confidence_stays_below_flag_threshold(self):
         out = extract_with_rules('Issued By: IEEE')
         self.assertTrue(all(v['confidence'] < 0.8 for k, v in out.items() if k != '_method'))
+
+
+class FakeResponse:
+    def __init__(self, status=200, payload=None, location=None):
+        import json
+        self.status_code = status
+        self.headers = {'Location': location} if location else {}
+        self.is_redirect = location is not None
+        self.raw = io.BytesIO(json.dumps(payload).encode() if payload is not None else b'<html></html>')
+        self.raw.read = lambda n, decode_content=True, _r=self.raw.read: _r(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestExternalVerification(unittest.TestCase):
+    BADGE_ID = '0b5c1c3e-1111-2222-3333-444455556666'
+    TEXT = f'Verify: https://www.credly.com/badges/{BADGE_ID}/public_url'
+
+    def assertion(self, **overrides):
+        data = {'type': 'Assertion', 'badge': 'https://api.credly.com/v1/obi/v2/badge_classes/b1'}
+        data.update(overrides)
+        return data
+
+    def verify(self, responses, issuer='Global Tech Institute', text=None):
+        """responses: {url: FakeResponse}; any other URL fails the test."""
+        def fake_get(url, **_kwargs):
+            if url not in responses:
+                raise AssertionError(f'unexpected fetch {url}')
+            return responses[url]
+        with mock.patch.object(ev.requests, 'get', side_effect=fake_get):
+            return ev.verify_external_issuer(issuer, {}, text or self.TEXT)
+
+    def responses(self, assertion, issuer_name='Global Tech Institute'):
+        return {
+            ev.CREDLY_ASSERTION_API.format(self.BADGE_ID): FakeResponse(payload={'data': assertion}),
+            'https://api.credly.com/v1/obi/v2/badge_classes/b1': FakeResponse(
+                payload={'name': 'ML Foundations', 'issuer': {'name': issuer_name}}),
+        }
+
+    def test_url_allowlist_blocks_ssrf_targets(self):
+        text = ('https://169.254.169.254/latest http://localhost/x https://credly.com.evil.io/a '
+                f'http://www.credly.com/badges/{self.BADGE_ID}')
+        self.assertEqual(ev.find_verification_urls(text), [f'https://www.credly.com/badges/{self.BADGE_ID}'])
+
+    def test_active_badge_is_verified(self):
+        result = self.verify(self.responses(self.assertion()))
+        self.assertEqual(result['status'], 'Verified (Open Badges)')
+
+    def test_revoked_badge_fails(self):
+        result = self.verify(self.responses(self.assertion(revoked=True)))
+        self.assertEqual(result['status'], 'Failed (Revoked)')
+
+    def test_expired_badge_fails(self):
+        result = self.verify(self.responses(self.assertion(expires='2020-01-01T00:00:00Z')))
+        self.assertEqual(result['status'], 'Failed (Expired)')
+
+    def test_issuer_mismatch_fails(self):
+        result = self.verify(self.responses(self.assertion(), issuer_name='Someone Else Academy'))
+        self.assertEqual(result['status'], 'Failed (Issuer mismatch)')
+
+    def test_redirect_off_allowlist_is_not_followed(self):
+        responses = {ev.CREDLY_ASSERTION_API.format(self.BADGE_ID):
+                     FakeResponse(status=302, location='https://attacker.example/x')}
+        self.assertIn('Manual', self.verify(responses)['status'])
+
+    def test_no_url_requires_manual_review(self):
+        self.assertIn('Manual', self.verify({}, text='no links here')['status'])
 
 
 class TestStatusAssignment(unittest.TestCase):
