@@ -106,7 +106,7 @@ Visit `http://localhost:5000` to upload and verify certificates!
    ```
    See `.env.example` for optional settings.
 
-   **No Azure? It still works.** Without a key, OCR runs locally with [RapidOCR](https://github.com/RapidAI/RapidOCR) (free PaddleOCR models on ONNX Runtime, CPU), and fields are read by a rule-based extractor (`backend/app/rule_extraction.py`). Rules-based results are always flagged for review. Force either engine with `OCR_PROVIDER=local` / `EXTRACTION_PROVIDER=rules`. RAG search still needs an Azure embedding deployment.
+   **No Azure? It still works.** Without a key, OCR runs locally with [RapidOCR](https://github.com/RapidAI/RapidOCR) (free PaddleOCR models on ONNX Runtime, CPU), and fields are read by a rule-based extractor (`backend/app/rule_extraction.py`). Rules-based results are always flagged for review. Force either engine with `OCR_PROVIDER=local` / `EXTRACTION_PROVIDER=rules`. The chat also works offline: search uses the free all-MiniLM-L6-v2 model bundled with ChromaDB (~80 MB, downloaded on first use), and answers list the closest matching records instead of a generated reply.
 3. **Storage**: `backend/data/uploads` and the ChromaDB store are created automatically. All processed files must live under `backend/data/`.
 
 ---
