@@ -583,3 +583,62 @@ iframe {
         transform: rotate(360deg);
     }
 }
+/* --- HISTORY / SETTINGS VIEWS --- */
+.view-panel {
+    padding: 1.5rem 2rem;
+}
+
+.muted {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.table-wrap {
+    overflow-x: auto;
+    margin-top: 1rem;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.data-table th {
+    text-align: left;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.data-table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+    vertical-align: top;
+}
+
+.data-table td.wrap {
+    white-space: normal;
+    min-width: 240px;
+}
+
+.settings-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.9rem 2rem;
+    margin-top: 1.25rem;
+}
+
+.settings-list dt {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.settings-list dd {
+    margin: 0;
+    word-break: break-word;
+}

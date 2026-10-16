@@ -24,9 +24,9 @@
             </div>
 
             <div class="nav-items">
-                <a href="#" class="active"><i data-lucide="layout-dashboard"></i> Dashboard</a>
-                <a href="#"><i data-lucide="history"></i> History</a>
-                <a href="#"><i data-lucide="settings"></i> Settings</a>
+                <a href="#dashboard" data-view="dashboard" class="active"><i data-lucide="layout-dashboard"></i> Dashboard</a>
+                <a href="#history" data-view="history"><i data-lucide="history"></i> History</a>
+                <a href="#settings" data-view="settings"><i data-lucide="settings"></i> Settings</a>
             </div>
 
             <div class="user-profile">
@@ -41,11 +41,11 @@
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-bar">
-                <h1>Verification Dashboard</h1>
+                <h1 id="pageTitle">Verification Dashboard</h1>
                 <div class="status-indicator">System Active <span class="dot"></span></div>
             </header>
 
-            <div class="content-grid">
+            <div class="content-grid" id="viewDashboard">
                 <!-- LEFT COLUMN: Upload & Preview -->
                 <div class="col-left">
                     <div class="upload-card card glass" id="dropZone">
@@ -132,6 +132,31 @@
                     </div>
                 </div>
             </div>
+
+            <!-- HISTORY: certificates stored in the RAG index -->
+            <section id="viewHistory" class="view-panel card glass hidden">
+                <div class="card-header">
+                    <h3>Processed Certificates</h3>
+                    <button class="btn-icon" onclick="loadHistory()" title="Refresh"><i data-lucide="refresh-cw"></i></button>
+                </div>
+                <div class="table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Document</th><th>Issuer</th><th>Subject</th><th>Issued</th><th>Expires</th><th>Status</th><th>Processed</th></tr>
+                        </thead>
+                        <tbody id="historyRows"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- SETTINGS: effective configuration (read-only) -->
+            <section id="viewSettings" class="view-panel card glass hidden">
+                <div class="card-header">
+                    <h3>Configuration</h3>
+                </div>
+                <p class="muted">Read-only. Change these in <code>.env</code> and <code>backend/trusted_issuers.json</code>, then restart the server.</p>
+                <dl class="settings-list" id="settingsList"></dl>
+            </section>
         </main>
     </div>
 
@@ -145,6 +170,71 @@
             return String(value ?? '')
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // --- Views (Dashboard / History / Settings) ---
+        const VIEWS = {
+            dashboard: { el: 'viewDashboard', title: 'Verification Dashboard' },
+            history: { el: 'viewHistory', title: 'History', load: () => loadHistory() },
+            settings: { el: 'viewSettings', title: 'Settings', load: () => loadSettings() },
+        };
+
+        function showView(name) {
+            const view = VIEWS[name] || VIEWS.dashboard;
+            for (const v of Object.values(VIEWS)) document.getElementById(v.el).classList.add('hidden');
+            document.getElementById(view.el).classList.remove('hidden');
+            document.getElementById('pageTitle').innerText = view.title;
+            document.querySelectorAll('.nav-items a').forEach(a => a.classList.toggle('active', a.dataset.view === (VIEWS[name] ? name : 'dashboard')));
+            if (view.load) view.load();
+        }
+
+        document.querySelectorAll('.nav-items a').forEach(a => a.addEventListener('click', (e) => {
+            e.preventDefault();
+            history.replaceState(null, '', '#' + a.dataset.view);
+            showView(a.dataset.view);
+        }));
+
+        async function loadHistory() {
+            const rows = document.getElementById('historyRows');
+            rows.innerHTML = '<tr><td colspan="7" class="muted">Loading...</td></tr>';
+            try {
+                const { items } = await (await fetch('/history')).json();
+                if (!items.length) {
+                    rows.innerHTML = '<tr><td colspan="7" class="muted">No certificates processed yet. Upload one on the Dashboard.</td></tr>';
+                    return;
+                }
+                rows.innerHTML = items.map(r => `
+                    <tr>
+                        <td>${escapeHtml(r.doc_id)}</td>
+                        <td>${escapeHtml(r.issuer || '-')}</td>
+                        <td class="wrap">${escapeHtml(r.subject || '-')}</td>
+                        <td>${escapeHtml(r.issued_date || '-')}</td>
+                        <td>${escapeHtml(r.expiry_date || '-')}</td>
+                        <td><span class="${escapeHtml((r.status || '').toLowerCase().replace(/ /g, '-'))}">${escapeHtml(r.status || '-')}</span></td>
+                        <td>${r.ingested_at ? escapeHtml(new Date(r.ingested_at).toLocaleString()) : '-'}</td>
+                    </tr>`).join('');
+            } catch (e) {
+                rows.innerHTML = '<tr><td colspan="7" class="muted">Could not load history.</td></tr>';
+            }
+        }
+
+        async function loadSettings() {
+            const list = document.getElementById('settingsList');
+            try {
+                const s = await (await fetch('/settings')).json();
+                const entries = [
+                    ['AI model (extraction & chat)', s.llm.provider === 'none' ? 'None (offline rules / record lookup)' : `${s.llm.provider}: ${s.llm.model}`],
+                    ['Field extraction', s.extraction],
+                    ['OCR', s.ocr],
+                    ['Search embeddings', s.embeddings],
+                    ['Certificates indexed', s.indexed_certificates],
+                    ['Upload limit', `${s.max_file_size_mb} MB; ${s.allowed_extensions.join(', ')}`],
+                    ['Trusted issuers', s.trusted_issuers.join(', ') || 'None'],
+                ];
+                list.innerHTML = entries.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('');
+            } catch (e) {
+                list.innerHTML = '<dd class="muted">Could not load settings.</dd>';
+            }
         }
 
         // Escape first, then allow only **bold** from the model's markdown
@@ -353,6 +443,13 @@
             document.getElementById('imagePreview').src = "";
             document.getElementById('dropZone').classList.remove('compact');
         }
+
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') sendChat();
+        });
+
+        // Open the view named in the URL (#history, #settings), default Dashboard
+        showView(location.hash.replace('#', '') || 'dashboard');
     </script>
 </body>
 
