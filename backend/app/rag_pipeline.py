@@ -228,7 +228,10 @@ class CertificateRAG:
                 temperature=0,
                 **self.chat.request_kwargs
             )
-            return {"answer": response.choices[0].message.content, "sources": sources}
+            answer = response.choices[0].message.content or ""
+            # Show only the records the answer cites as [doc_id]; keep all if it cites none
+            cited = [s for s in sources if f"[{s['doc_id']}]" in answer]
+            return {"answer": answer, "sources": cited or sources}
         except Exception as e:
             error_str = str(e)
             if "filtered" in error_str or "content management policy" in error_str:

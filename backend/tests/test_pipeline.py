@@ -396,6 +396,14 @@ class TestRAG(unittest.TestCase):
         self.assertEqual(result['answer'], 'You have Cloud Operations [C1]')
         self.assertEqual(result['sources'][0]['doc_id'], 'C1')
 
+    def test_sources_limited_to_cited_records(self):
+        rag, _ = self.offline_rag_with_chat(fake_chat_client(['first']))
+        with mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag.ingest_certificate({'doc_id': 'C2', 'fields': {'issuer': 'IEEE', 'subject': 'Machine Learning'}})
+            rag.chat = llm_client.ChatBackend(fake_chat_client(['Only C2 matters [C2]']), 'm', 'openrouter')
+            result = rag.answer_question('Which certificates do I have?')
+        self.assertEqual([s['doc_id'] for s in result['sources']], ['C2'])
+
     def test_huggingface_failure_falls_back_to_records(self):
         def create(**_kwargs):
             err = RuntimeError('Payment required')
@@ -520,7 +528,9 @@ class TestFlaskAPI(unittest.TestCase):
     def test_settings_reports_config_without_secrets(self):
         self.server.rag.embedding_mode = 'local'
         self.server.rag.collection.count.return_value = 2
-        env = {'HF_TOKEN': 'hf_secretvalue123', 'AZURE_OPENAI_API_KEY': '', 'LLM_PROVIDER': ''}
+        # Clear every provider var: loading app.py reads the developer's real .env
+        env = {'HF_TOKEN': 'hf_secretvalue123', 'AZURE_OPENAI_API_KEY': '', 'LLM_PROVIDER': '',
+               'OPENROUTER_API_KEY': '', 'LLM_API_KEY': ''}
         with mock.patch.dict(os.environ, env):
             res = self.client.get('/settings')
         self.assertEqual(res.json['llm']['provider'], 'huggingface')
