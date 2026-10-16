@@ -33,7 +33,8 @@ A production-grade, end-to-end system for **AI-powered certificate detection, fi
 - **🛡️ Multi-Level Validation**:
   - **Date Logic**: Ensures `issued_date` < `expiry_date` and validates formats.
   - **Issuer Verification**: Cross-references against a `trusted_issuers.json` whitelist (case/punctuation/legal-suffix normalised, strict fuzzy match for OCR typos).
-- **📄 OCR**: Text PDFs via `pypdf`; images (JPG/PNG) and scanned PDFs (embedded page images) via the Azure OpenAI vision model.
+  - **External Verification**: For untrusted issuers, badge links printed on the certificate (Credly, Accredible, Badgr) are checked against the platform's Open Badges assertion for revocation, expiry and issuer. Only allowlisted HTTPS hosts are fetched; anything else goes to manual review.
+- **📄 OCR**: Text PDFs via `pypdf`; images (JPG/PNG) and scanned PDFs (embedded page images) via the Azure OpenAI vision model, or free offline RapidOCR when Azure is not configured.
 - **📚 RAG (Retrieval-Augmented Generation)**: Store extracted certificates in a ChromaDB vector database and query them using natural language. Answers cite certificate IDs and return the retrieved sources.
 - **📊 Production Ready**: Comprehensive logging (JSONL), security protections (PII redaction, Path traversal), and batch processing capabilities.
 
@@ -45,7 +46,7 @@ A production-grade, end-to-end system for **AI-powered certificate detection, fi
 graph TD
     A[Certificate File] --> B{OCR Module}
     B -->|Text PDF| C[pypdf]
-    B -->|Image/Scanned| D[GPT-4 Vision OCR]
+    B -->|Image/Scanned| D[GPT Vision or local RapidOCR]
     C --> E[Document Content]
     D --> E
     E --> F{Identification}
@@ -103,7 +104,9 @@ Visit `http://localhost:5000` to upload and verify certificates!
    AZURE_OPENAI_DEPLOYMENT=gpt-4o
    AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-small
    ```
-   See `.env.example` for optional settings. Without a key, extraction returns nothing; set `USE_MOCK_LLM=1` for an offline demo with fixed mock data.
+   See `.env.example` for optional settings.
+
+   **No Azure? It still works.** Without a key, OCR runs locally with [RapidOCR](https://github.com/RapidAI/RapidOCR) (free PaddleOCR models on ONNX Runtime, CPU), and fields are read by a rule-based extractor (`backend/app/rule_extraction.py`). Rules-based results are always flagged for review. Force either engine with `OCR_PROVIDER=local` / `EXTRACTION_PROVIDER=rules`. RAG search still needs an Azure embedding deployment.
 3. **Storage**: `backend/data/uploads` and the ChromaDB store are created automatically. All processed files must live under `backend/data/`.
 
 ---
