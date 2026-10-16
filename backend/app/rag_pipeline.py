@@ -12,31 +12,63 @@ Cite the Certificate ID of every record you rely on in square brackets, e.g. [CE
 If the records do not contain the answer, reply exactly: "I cannot find that information in the certificate records."
 """
 
+# Offline mode: extractive answers only include records at least this similar (cosine distance),
+# and only those within LOCAL_DISTANCE_MARGIN of the best match
+LOCAL_MAX_DISTANCE = 0.8
+LOCAL_DISTANCE_MARGIN = 0.05
+
+# Azure and local embeddings have different dimensions (1536 vs 384), so each gets its own collection
+COLLECTIONS = {'azure': 'certificates', 'local': 'certificates_local'}
+
+def _embedding_mode(client):
+    """RAG_EMBEDDINGS=auto|azure|local. auto: Azure when configured, else free local MiniLM."""
+    mode = os.getenv('RAG_EMBEDDINGS', 'auto').lower()
+    if mode == 'azure' or (mode == 'auto' and client):
+        return 'azure'
+    return 'local'
+
 class CertificateRAG:
     def __init__(self, db_path=DEFAULT_DB_PATH):
         """Initialize RAG pipeline with Chroma vector DB"""
+
+        # Initialize Azure OpenAI - check for sanitized keys
+        self.client = get_client()
+        self.embedding_mode = _embedding_mode(self.client)
+        self._local_ef = None
+        if not self.client:
+            print("⚠️  RAG: Azure OpenAI not configured. Using local embeddings and extractive answers.")
 
         # Initialize Chroma (Persistent Storage)
         self.chroma_client = chromadb.PersistentClient(path=db_path)
 
         self.collection = self.chroma_client.get_or_create_collection(
-            name="certificates",
+            name=COLLECTIONS[self.embedding_mode],
             metadata={"hnsw:space": "cosine"}
         )
 
-        # Initialize Azure OpenAI - check for sanitized keys
-        self.client = get_client()
-        if not self.client:
-            print("⚠️  RAG Warning: Valid Azure API Key not found. RAG will not function correctly.")
-
         self.deployment = chat_deployment()
+
+    def _local_embed(self, text):
+        """Free, offline sentence embeddings (all-MiniLM-L6-v2 on ONNX, bundled with chromadb).
+        The ~80 MB model is downloaded to ~/.cache/chroma on first use."""
+        if self._local_ef is None:
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+            self._local_ef = DefaultEmbeddingFunction()
+        return [float(x) for x in self._local_ef([text])[0]]
 
     def get_embeddings(self, text):
         """
-        Generate embeddings using Azure OpenAI.
+        Generate embeddings (Azure OpenAI or local MiniLM, see RAG_EMBEDDINGS).
         Returns None when embeddings are unavailable, so callers never store or search
         with placeholder vectors (those would make every record equally 'similar').
         """
+        if self.embedding_mode == 'local':
+            try:
+                return self._local_embed(text)
+            except Exception as e:
+                print(f"⚠️ Local embedding error: {e}")
+                return None
+
         if not self.client:
             return None
 
@@ -108,14 +140,31 @@ class CertificateRAG:
             n_results=min(n_results, count)
         )
 
+    @staticmethod
+    def _extractive_answer(sources, metas):
+        """Offline answer: list the retrieved records that are close enough to the question."""
+        lines, kept = [], []
+        distances = [s['distance'] for s in sources if s['distance'] is not None]
+        cutoff = min(LOCAL_MAX_DISTANCE, min(distances) + LOCAL_DISTANCE_MARGIN) if distances else LOCAL_MAX_DISTANCE
+        for source, meta in zip(sources, metas):
+            if source['distance'] is not None and source['distance'] > cutoff:
+                continue
+            meta = meta or {}
+            details = [f"{label}: {meta[key]}" for key, label in
+                       (('issuer', 'Issuer'), ('subject', 'Subject'), ('issued_date', 'Issued'),
+                        ('expiry_date', 'Expires'), ('status', 'Status')) if meta.get(key)]
+            lines.append(f"**[{source['doc_id']}]** " + " | ".join(details))
+            kept.append(source)
+        if not kept:
+            return {"answer": "No certificate in the records closely matches that question.", "sources": []}
+        header = "AI answers need Azure OpenAI, so here are the closest matching certificate records:"
+        return {"answer": header + "\n" + "\n".join(lines), "sources": kept}
+
     def answer_question(self, question):
         """
         Generate a grounded answer from retrieved certificate records.
         Returns {"answer": str, "sources": [{"doc_id", "issuer", "status", "distance"}]}.
         """
-        if not self.client:
-            return {"answer": "RAG is unavailable: Azure OpenAI is not configured.", "sources": []}
-
         if self.collection.count() == 0:
             return {"answer": "No certificates have been ingested yet.", "sources": []}
 
@@ -141,7 +190,12 @@ class CertificateRAG:
             )
         ]
 
-        # 3. Generate
+        # 3a. No LLM: return the closest matching records verbatim instead of a generated answer
+        if not self.client:
+            metas = (results.get('metadatas') or [[{}] * len(context_docs)])[0]
+            return self._extractive_answer(sources, metas)
+
+        # 3b. Generate
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment,

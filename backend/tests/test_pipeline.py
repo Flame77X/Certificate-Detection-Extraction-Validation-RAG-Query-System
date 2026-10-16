@@ -308,13 +308,30 @@ class TestRAG(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.db_dir, ignore_errors=True)
 
-    def test_without_client_nothing_is_indexed(self):
-        with mock.patch.object(rp, 'get_client', return_value=None):
+    def test_forced_azure_without_client_indexes_nothing(self):
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.dict(os.environ, {'RAG_EMBEDDINGS': 'azure'}):
             rag = rp.CertificateRAG(db_path=self.db_dir)
             result = rag.ingest_certificate({'doc_id': 'C1', 'fields': {}})
             self.assertFalse(result['success'])
             self.assertEqual(rag.collection.count(), 0)
             self.assertEqual(rag.answer_question('anything')['sources'], [])
+
+    def test_offline_mode_returns_closest_records(self):
+        def fake_local_embed(_self, text):
+            text = text.lower()
+            return [1.0 if 'cloud' in text else 0.05, 1.0 if 'learning' in text else 0.05, 0.1]
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.dict(os.environ, {'RAG_EMBEDDINGS': 'auto'}), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', fake_local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            self.assertEqual(rag.collection.name, 'certificates_local')
+            rag.ingest_certificate({'doc_id': 'C1', 'final_status': 'Verified',
+                                    'fields': {'issuer': 'Ministry of Education', 'subject': 'Cloud Operations'}})
+            rag.ingest_certificate({'doc_id': 'C2', 'fields': {'issuer': 'IEEE', 'subject': 'Machine Learning'}})
+            result = rag.answer_question('Which cloud certificate do I have?')
+        self.assertEqual([s['doc_id'] for s in result['sources']], ['C1'])
+        self.assertIn('Issuer: Ministry of Education', result['answer'])
 
     def test_answer_includes_sources(self):
         def embed(**kwargs):
