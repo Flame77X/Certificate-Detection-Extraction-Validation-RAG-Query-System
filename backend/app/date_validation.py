@@ -1,4 +1,8 @@
+import json
+import os
+import re
 from datetime import datetime
+from difflib import SequenceMatcher
 
 def validate_dates(issued_date_str, expiry_date_str):
     """
@@ -52,26 +56,49 @@ def validate_dates(issued_date_str, expiry_date_str):
         "expiry_status": expiry_status,
         "dates_consistent": dates_consistent
     }
+
+# Legal-form suffixes that don't change issuer identity ("Acme Pvt Ltd" == "Acme")
+_ISSUER_SUFFIXES = {'pvt', 'private', 'ltd', 'limited', 'inc', 'llc', 'corp', 'corporation', 'co', 'plc', 'gmbh'}
+# Strict threshold: only absorbs OCR/LLM noise ("Microsft Training"), not different organisations
+ISSUER_FUZZY_THRESHOLD = 0.92
+
+def normalize_issuer(name):
+    """Casefold, strip punctuation and legal-form suffixes for issuer comparison."""
+    words = re.sub(r'[^\w\s]', ' ', str(name or '')).casefold().split()
+    while words and words[-1] in _ISSUER_SUFFIXES:
+        words.pop()
+    return ' '.join(words)
+
+def match_trusted_issuer(issuer_name, trusted_issuers):
+    """Return (matched_trusted_name, score) or (None, best_score)."""
+    target = normalize_issuer(issuer_name)
+    if not target:
+        return None, 0.0
+    best_name, best_score = None, 0.0
+    for trusted in trusted_issuers:
+        score = SequenceMatcher(None, target, normalize_issuer(trusted)).ratio()
+        if score > best_score:
+            best_name, best_score = trusted, score
+    if best_score >= ISSUER_FUZZY_THRESHOLD:
+        return best_name, round(best_score, 3)
+    return None, round(best_score, 3)
+
 def validate_issuer(issuer_name):
-    """Validate issuer against trusted issuer list"""
-    import json
-    import os
-    
+    """Validate issuer against trusted issuer list (normalised + strict fuzzy match)"""
     try:
-        # Load trusted list from project root
+        # Load trusted list from backend root
         filepath = os.path.join(os.path.dirname(__file__), '..', 'trusted_issuers.json')
         with open(filepath, 'r') as f:
             trusted_list = json.load(f)
-        
-        # Check matching
-        if not issuer_name:
-            is_trusted = False
-        else:
-            is_trusted = issuer_name in trusted_list['trusted_issuers']
-        
+
+        matched, score = match_trusted_issuer(issuer_name, trusted_list['trusted_issuers'])
+        is_trusted = matched is not None
+
         return {
             'issuer': issuer_name,
             'is_trusted': is_trusted,
+            'matched_issuer': matched,
+            'match_score': score,
             'status': 'Valid Issuer' if is_trusted else 'Untrusted Issuer'
         }
     except Exception as e:
