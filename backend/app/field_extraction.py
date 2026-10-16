@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from openai import BadRequestError
 
 from app.llm_client import get_client, chat_deployment
+from app.rule_extraction import extract_with_rules
 
 TARGET_FIELDS = ['issuer', 'certificate_number', 'issued_date', 'expiry_date', 'subject']
 
@@ -130,14 +131,18 @@ def calculate_consensus(results_list, total_runs=None):
 
 def extract_with_azure(text_content):
     """
-    MAIN ENTRY: Self-consistency extraction.
-    Runs CONSENSUS_ATTEMPTS extractions in parallel and returns the per-field majority vote,
-    plus '_voting_debug' with the raw vote counts.
+    MAIN ENTRY. Engine selection (EXTRACTION_PROVIDER=auto|llm|rules, default auto):
+    - Azure configured: self-consistency LLM extraction, CONSENSUS_ATTEMPTS parallel runs, per-field
+      majority vote, plus '_voting_debug' with the raw vote counts.
+    - Not configured: rule-based extraction (free/offline), or fixed mock data if USE_MOCK_LLM=1.
+    '_method' records which engine produced the result.
     """
-    client = get_client()
-    if not client and not _mock_enabled():
-        print("⚠️ Azure OpenAI not configured (set USE_MOCK_LLM=1 for offline mock data). Skipping extraction.")
-        return {}
+    provider = os.getenv("EXTRACTION_PROVIDER", "auto").lower()
+    client = None if provider == "rules" else get_client()
+    if provider == "rules" or (not client and not _mock_enabled()):
+        if provider != "rules":
+            print("⚠️ Azure OpenAI not configured. Using rule-based extraction (USE_MOCK_LLM=1 for fixed mock data).")
+        return extract_with_rules(text_content)
 
     print(f"🧠 Consensus Engine: Running {CONSENSUS_ATTEMPTS} parallel extraction attempts...")
     with ThreadPoolExecutor(max_workers=CONSENSUS_ATTEMPTS) as pool:
@@ -153,6 +158,7 @@ def extract_with_azure(text_content):
 
     # Inject voting details into the output so logging can find it
     final_output['_voting_debug'] = voting_details
+    final_output['_method'] = 'llm_consensus' if client else 'mock'
 
     return final_output
 

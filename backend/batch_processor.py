@@ -101,6 +101,7 @@ def process_single_file(file_path):
     output['issuer_validation'] = issuer_validation
     output['external_verification'] = external_verification
     output['final_status'] = final_status
+    output['extraction_method'] = extractor_output.get('_method', 'none')
     # output['voting_analysis'] = voting_details 
     
     return output

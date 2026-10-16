@@ -14,6 +14,7 @@ sys.path.append(BACKEND_DIR)
 from app import field_extraction as fe
 from app import rag_pipeline as rp
 from app import ocr_module
+from app.rule_extraction import extract_with_rules
 from app.date_validation import validate_dates, validate_issuer, normalize_issuer
 from app.logging_utils import check_for_issues
 from app.security import validate_secure_path, redact_pii, ALLOWED_DATA_DIR
@@ -31,7 +32,10 @@ def fake_chat_client(contents):
 class TestOCRRouting(unittest.TestCase):
 
     def route(self, provider, configured, vision_text='azure text'):
-        with mock.patch.dict(os.environ, {'OCR_PROVIDER': provider}),              mock.patch.object(ocr_module, 'is_configured', return_value=configured),              mock.patch.object(ocr_module, '_vision_ocr', return_value=vision_text) as vision,              mock.patch.object(ocr_module, '_local_ocr', return_value='local text') as local:
+        with mock.patch.dict(os.environ, {'OCR_PROVIDER': provider}), \
+             mock.patch.object(ocr_module, 'is_configured', return_value=configured), \
+             mock.patch.object(ocr_module, '_vision_ocr', return_value=vision_text) as vision, \
+             mock.patch.object(ocr_module, '_local_ocr', return_value='local text') as local:
             return ocr_module.ocr_image(b'img', 'image/png'), vision.called, local.called
 
     def test_auto_without_azure_uses_local(self):
@@ -96,10 +100,18 @@ class TestExtraction(unittest.TestCase):
     def test_extract_single_returns_none_on_bad_output(self):
         self.assertIsNone(fe._extract_single('text', fake_chat_client(['not json'])))
 
-    def test_no_client_without_mock_returns_empty(self):
+    def test_no_client_without_mock_uses_rules(self):
         with mock.patch.object(fe, 'get_client', return_value=None), \
-             mock.patch.dict(os.environ, {'USE_MOCK_LLM': '0'}):
-            self.assertEqual(fe.extract_with_azure('text'), {})
+             mock.patch.dict(os.environ, {'USE_MOCK_LLM': '0', 'EXTRACTION_PROVIDER': 'auto'}):
+            out = fe.extract_with_azure('Issued By: IEEE\nCertificate Number: IE-2024-001')
+        self.assertEqual(out['_method'], 'rules')
+        self.assertEqual(out['issuer']['value'], 'IEEE')
+
+    def test_forced_rules_skips_llm(self):
+        with mock.patch.object(fe, 'get_client') as get_client, \
+             mock.patch.dict(os.environ, {'EXTRACTION_PROVIDER': 'rules'}):
+            self.assertEqual(fe.extract_with_azure('text')['_method'], 'rules')
+        get_client.assert_not_called()
 
     def test_mock_mode_is_opt_in(self):
         with mock.patch.object(fe, 'get_client', return_value=None), \
@@ -130,6 +142,30 @@ class TestNoExpiryCertificates(unittest.TestCase):
         data = {'fields': fields, 'confidence': {k: 1.0 for k in fields}}
         status = assign_certificate_status(data, validate_dates('2024-01-01', None), {'is_trusted': True})
         self.assertEqual(status, 'Verified')
+
+
+class TestRuleExtraction(unittest.TestCase):
+
+    def values(self, text):
+        return {k: v['value'] for k, v in extract_with_rules(text).items() if k != '_method'}
+
+    def test_labelled_certificate(self):
+        text = open(os.path.join(ALLOWED_DATA_DIR, 'sample_certificate.txt'), encoding='utf-8').read()
+        self.assertEqual(self.values(text), {
+            'issuer': 'Global Tech Institute', 'certificate_number': 'GTI-2024-88A',
+            'issued_date': '2024-03-10', 'expiry_date': '2027-03-10',
+            'subject': 'Advanced Python Systems Engineering'})
+
+    def test_prose_and_alternative_labels(self):
+        vals = self.values('This certificate is issued by IEEE on 5 March 2024. Credential ID: AB12-99.\n'
+                           'Expires on March 5, 2027')
+        self.assertEqual(vals['issuer'], 'IEEE')
+        self.assertEqual(vals['certificate_number'], 'AB12-99')
+        self.assertEqual(vals['expiry_date'], 'March 5, 2027')
+
+    def test_confidence_stays_below_flag_threshold(self):
+        out = extract_with_rules('Issued By: IEEE')
+        self.assertTrue(all(v['confidence'] < 0.8 for k, v in out.items() if k != '_method'))
 
 
 class TestStatusAssignment(unittest.TestCase):

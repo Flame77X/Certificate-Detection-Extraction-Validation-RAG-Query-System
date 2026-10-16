@@ -256,7 +256,7 @@
                     <i data-lucide="scan"></i> 
                     <div>
                         <strong>Deep Scan Analysis</strong>
-                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Extraction confidence (avg): ${confPercent}%</div>
+                        <div style="font-size:0.85em; color:var(--text-muted); margin-top:2px;">Extraction confidence (avg): ${confPercent}% via ${escapeHtml(data.extraction_method || 'unknown')}</div>
                     </div>
                 </li>
                 <li class="${isIssuerValid ? 'success' : 'warning'}">
