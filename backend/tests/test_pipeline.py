@@ -119,30 +119,48 @@ class TestExtraction(unittest.TestCase):
 
     def test_extract_single_normalises_values(self):
         client = fake_chat_client(['{"issuer": " IEEE ", "certificate_number": 12345, "subject": ""}'])
-        result = fe._extract_single('text', client)
+        result = fe._extract_single('text', llm_client.ChatBackend(client, 'm', 'huggingface'))
         self.assertEqual(result['issuer'], 'IEEE')
         self.assertEqual(result['certificate_number'], '12345')
         self.assertIsNone(result['subject'])
         self.assertIsNone(result['expiry_date'])
 
     def test_extract_single_returns_none_on_bad_output(self):
-        self.assertIsNone(fe._extract_single('text', fake_chat_client(['not json'])))
+        backend = llm_client.ChatBackend(fake_chat_client(['not json']), 'm', 'huggingface')
+        self.assertIsNone(fe._extract_single('text', backend))
+
+    def test_huggingface_consensus(self):
+        reply = '{"issuer": "IEEE", "certificate_number": "IE-1", "issued_date": "2024-01-01", "subject": "X"}'
+        backend = llm_client.ChatBackend(fake_chat_client([reply] * 3), 'Qwen/test', 'huggingface')
+        with mock.patch.object(fe, 'get_chat_backend', return_value=backend), \
+             mock.patch.dict(os.environ, {'EXTRACTION_PROVIDER': 'auto'}):
+            out = fe.extract_with_azure('text')
+        self.assertEqual(out['_method'], 'huggingface_consensus')
+        self.assertEqual(out['issuer'], {'value': 'IEEE', 'confidence': 1.0})
+
+    def test_all_llm_runs_failing_falls_back_to_rules(self):
+        backend = llm_client.ChatBackend(fake_chat_client(['not json'] * 3), 'Qwen/test', 'huggingface')
+        with mock.patch.object(fe, 'get_chat_backend', return_value=backend), \
+             mock.patch.dict(os.environ, {'EXTRACTION_PROVIDER': 'auto'}):
+            out = fe.extract_with_azure('Issued By: IEEE')
+        self.assertEqual(out['_method'], 'rules')
+        self.assertEqual(out['issuer']['value'], 'IEEE')
 
     def test_no_client_without_mock_uses_rules(self):
-        with mock.patch.object(fe, 'get_client', return_value=None), \
+        with mock.patch.object(fe, 'get_chat_backend', return_value=None), \
              mock.patch.dict(os.environ, {'USE_MOCK_LLM': '0', 'EXTRACTION_PROVIDER': 'auto'}):
             out = fe.extract_with_azure('Issued By: IEEE\nCertificate Number: IE-2024-001')
         self.assertEqual(out['_method'], 'rules')
         self.assertEqual(out['issuer']['value'], 'IEEE')
 
     def test_forced_rules_skips_llm(self):
-        with mock.patch.object(fe, 'get_client') as get_client, \
+        with mock.patch.object(fe, 'get_chat_backend') as get_chat_backend, \
              mock.patch.dict(os.environ, {'EXTRACTION_PROVIDER': 'rules'}):
             self.assertEqual(fe.extract_with_azure('text')['_method'], 'rules')
-        get_client.assert_not_called()
+        get_chat_backend.assert_not_called()
 
     def test_mock_mode_is_opt_in(self):
-        with mock.patch.object(fe, 'get_client', return_value=None), \
+        with mock.patch.object(fe, 'get_chat_backend', return_value=None), \
              mock.patch.dict(os.environ, {'USE_MOCK_LLM': '1'}):
             fields, confidence = fe.extract_fields(fe.extract_with_azure('text'))
         self.assertEqual(fields['issuer'], 'ISO Authority')

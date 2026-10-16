@@ -4,9 +4,9 @@ import os
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
-from openai import BadRequestError
+from openai import BadRequestError, UnprocessableEntityError
 
-from app.llm_client import get_client, chat_deployment
+from app.llm_client import get_chat_backend
 from app.rule_extraction import extract_with_rules
 
 TARGET_FIELDS = ['issuer', 'certificate_number', 'issued_date', 'expiry_date', 'subject']
@@ -48,22 +48,21 @@ def _parse_json_object(content):
         raise ValueError("No JSON object in model output")
     return json.loads(content[start:end + 1])
 
-def _chat_json(client, messages):
-    """Request JSON mode; fall back to plain completion for deployments that reject response_format."""
-    kwargs = dict(model=chat_deployment(), messages=messages,
+def _chat_json(backend, messages):
+    """Request JSON mode; fall back to plain completion for models/providers that reject response_format."""
+    kwargs = dict(model=backend.model, messages=messages,
                   temperature=EXTRACTION_TEMPERATURE, timeout=30)
     try:
-        return client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
-    except BadRequestError:
-        return client.chat.completions.create(**kwargs)
+        return backend.client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
+    except (BadRequestError, UnprocessableEntityError):
+        return backend.client.chat.completions.create(**kwargs)
 
-def _extract_single(text_content, client=None):
+def _extract_single(text_content, backend=None):
     """
-    (Private) One extraction run. Returns {field: value-or-None} for TARGET_FIELDS, or None on failure.
+    (Private) One extraction run with a ChatBackend (Azure or Hugging Face).
+    Returns {field: value-or-None} for TARGET_FIELDS, or None on failure.
     """
-    if client is None:
-        client = get_client()
-    if not client:
+    if backend is None:
         return dict(MOCK_VALUES) if _mock_enabled() else None
 
     messages = [
@@ -71,7 +70,7 @@ def _extract_single(text_content, client=None):
         {"role": "user", "content": f"Certificate text:\n<<<\n{text_content[:MAX_INPUT_CHARS]}\n>>>"},
     ]
     try:
-        response = _chat_json(client, messages)
+        response = _chat_json(backend, messages)
         data = _parse_json_object(response.choices[0].message.content)
     except Exception as e:
         print(f"❌ Extraction attempt failed: {type(e).__name__}")
@@ -132,33 +131,36 @@ def calculate_consensus(results_list, total_runs=None):
 def extract_with_azure(text_content):
     """
     MAIN ENTRY. Engine selection (EXTRACTION_PROVIDER=auto|llm|rules, default auto):
-    - Azure configured: self-consistency LLM extraction, CONSENSUS_ATTEMPTS parallel runs, per-field
-      majority vote, plus '_voting_debug' with the raw vote counts.
-    - Not configured: rule-based extraction (free/offline), or fixed mock data if USE_MOCK_LLM=1.
-    '_method' records which engine produced the result.
+    - Chat model available (Azure, else Hugging Face via HF_TOKEN): self-consistency extraction,
+      CONSENSUS_ATTEMPTS parallel runs, per-field majority vote, plus '_voting_debug' with vote counts.
+    - No chat model: rule-based extraction (free/offline), or fixed mock data if USE_MOCK_LLM=1.
+    - All LLM runs fail (e.g. HF credits exhausted): rule-based extraction.
+    '_method' records which engine produced the result: azure_consensus, huggingface_consensus, rules, mock.
     """
-    provider = os.getenv("EXTRACTION_PROVIDER", "auto").lower()
-    client = None if provider == "rules" else get_client()
-    if provider == "rules" or (not client and not _mock_enabled()):
+    provider = (os.getenv("EXTRACTION_PROVIDER") or "auto").lower()
+    backend = None if provider == "rules" else get_chat_backend()
+    if provider == "rules" or (not backend and not _mock_enabled()):
         if provider != "rules":
-            print("⚠️ Azure OpenAI not configured. Using rule-based extraction (USE_MOCK_LLM=1 for fixed mock data).")
+            print("⚠️ No LLM configured (Azure OpenAI or HF_TOKEN). Using rule-based extraction.")
         return extract_with_rules(text_content)
 
-    print(f"🧠 Consensus Engine: Running {CONSENSUS_ATTEMPTS} parallel extraction attempts...")
+    engine = backend.provider if backend else 'mock'
+    print(f"🧠 Consensus Engine ({engine}): Running {CONSENSUS_ATTEMPTS} parallel extraction attempts...")
     with ThreadPoolExecutor(max_workers=CONSENSUS_ATTEMPTS) as pool:
-        runs = list(pool.map(lambda _: _extract_single(text_content, client), range(CONSENSUS_ATTEMPTS)))
+        runs = list(pool.map(lambda _: _extract_single(text_content, backend), range(CONSENSUS_ATTEMPTS)))
     results = [r for r in runs if r]
 
     print(f"   ✅ Completed {len(results)}/{CONSENSUS_ATTEMPTS} successful extractions.")
 
     if not results:
-        return {} # Failed all
+        print("⚠️ All LLM extraction attempts failed. Falling back to rule-based extraction.")
+        return extract_with_rules(text_content)
 
     final_output, voting_details = calculate_consensus(results, total_runs=CONSENSUS_ATTEMPTS)
 
     # Inject voting details into the output so logging can find it
     final_output['_voting_debug'] = voting_details
-    final_output['_method'] = 'llm_consensus' if client else 'mock'
+    final_output['_method'] = f'{backend.provider}_consensus' if backend else 'mock'
 
     return final_output
 
