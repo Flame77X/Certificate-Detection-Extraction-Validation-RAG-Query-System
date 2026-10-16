@@ -225,7 +225,8 @@ class CertificateRAG:
                     {"role": "system", "content": ANSWER_SYSTEM_PROMPT.format(today=datetime.now().date().isoformat())},
                     {"role": "user", "content": f"Certificate records:\n{context_text}\n\nQuestion: {question}"}
                 ],
-                temperature=0
+                temperature=0,
+                **self.chat.request_kwargs
             )
             return {"answer": response.choices[0].message.content, "sources": sources}
         except Exception as e:

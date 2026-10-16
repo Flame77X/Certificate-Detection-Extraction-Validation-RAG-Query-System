@@ -51,7 +51,7 @@ def _parse_json_object(content):
 def _chat_json(backend, messages):
     """Request JSON mode; fall back to plain completion for models/providers that reject response_format."""
     kwargs = dict(model=backend.model, messages=messages,
-                  temperature=EXTRACTION_TEMPERATURE, timeout=30)
+                  temperature=EXTRACTION_TEMPERATURE, timeout=30, **backend.request_kwargs)
     try:
         return backend.client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
     except (BadRequestError, UnprocessableEntityError):

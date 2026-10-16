@@ -57,8 +57,16 @@ class TestChatBackendSelection(unittest.TestCase):
 
     def test_openrouter_free_model_preferred_over_huggingface(self):
         backend = self.backend({**self.OPENROUTER, **self.HF})
-        self.assertEqual((backend.provider, backend.model), ('openrouter', llm_client.OPENROUTER_DEFAULT_MODEL))
+        defaults = llm_client.OPENROUTER_DEFAULT_MODEL.split(',')
+        self.assertEqual((backend.provider, backend.model), ('openrouter', defaults[0]))
         self.assertEqual(str(backend.client.base_url).rstrip('/'), llm_client.OPENROUTER_BASE_URL)
+        # Busy free models are skipped via OpenRouter's fallback list
+        self.assertEqual(backend.request_kwargs, {'extra_body': {'models': defaults}})
+        self.assertTrue(all(m.endswith(':free') for m in defaults))
+
+    def test_single_openrouter_model_has_no_fallback_list(self):
+        backend = self.backend({**self.OPENROUTER, 'OPENROUTER_MODEL': 'org/model:free'})
+        self.assertEqual((backend.model, backend.request_kwargs), ('org/model:free', {}))
 
     def test_custom_openai_compatible_needs_url_and_model(self):
         self.assertIsNone(self.backend({'LLM_API_KEY': 'k', 'LLM_BASE_URL': 'https://api.example.com/v1'}))

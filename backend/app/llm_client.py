@@ -16,7 +16,7 @@ Env vars are read at call time (not import time) so load_dotenv() ordering
 in the entry points does not matter.
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from openai import AzureOpenAI, OpenAI
 
 DEFAULT_API_VERSION = "2024-02-15-preview"
@@ -26,8 +26,11 @@ HF_BASE_URL = "https://router.huggingface.co/v1"
 HF_DEFAULT_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-# $0 model with JSON output support; free models are rate-limited per day/minute by OpenRouter
-OPENROUTER_DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+# $0 models with JSON output support, tried in order via OpenRouter fallback routing: free models are
+# often rate-limited upstream (429), so a busy one is skipped. OPENROUTER_MODEL accepts a comma-separated list.
+OPENROUTER_DEFAULT_MODEL = ("nvidia/nemotron-3-super-120b-a12b:free,"
+                            "google/gemma-4-31b-it:free,"
+                            "dots-studio/dots-3-note-preview:free")
 
 # name -> (api key env, base url env or fixed url, model env, default model)
 OPENAI_COMPATIBLE = {
@@ -44,6 +47,8 @@ class ChatBackend:
     client: object
     model: str
     provider: str  # 'azure' | 'openrouter' | 'custom' | 'huggingface'
+    # Extra arguments for chat.completions.create (e.g. OpenRouter fallback model list)
+    request_kwargs: dict = field(default_factory=dict)
 
 def _clean_endpoint(endpoint):
     """Accept either the resource URL or a full deployment URL copied from the portal."""
@@ -77,10 +82,14 @@ def _openai_compatible(name):
     key_env, base_url, model_env, default_model = OPENAI_COMPATIBLE[name]
     api_key = os.getenv(key_env)
     base_url = base_url or os.getenv('LLM_BASE_URL')
-    model = os.getenv(model_env) or default_model
-    if not (_real(api_key) and base_url and model):
+    models = [m.strip() for m in (os.getenv(model_env) or default_model or '').split(',') if m.strip()]
+    if not (_real(api_key) and base_url and models):
         return None
-    return ChatBackend(OpenAI(base_url=base_url, api_key=api_key), model, name)
+    request_kwargs = {}
+    if name == 'openrouter' and len(models) > 1:
+        # https://openrouter.ai/docs: 'models' = ordered fallbacks when the first is unavailable/rate-limited
+        request_kwargs = {'extra_body': {'models': models}}
+    return ChatBackend(OpenAI(base_url=base_url, api_key=api_key), models[0], name, request_kwargs)
 
 def get_chat_backend():
     """
