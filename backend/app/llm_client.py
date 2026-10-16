@@ -1,14 +1,16 @@
 """
 Shared LLM configuration.
 
-Two chat providers, both spoken to through the `openai` SDK:
+Chat providers, all spoken to through the `openai` SDK:
 - Azure OpenAI (AZURE_OPENAI_* vars): chat, vision and embeddings.
-- Hugging Face Inference Providers (HF_TOKEN): free-tier chat via the
-  OpenAI-compatible router at https://router.huggingface.co/v1. Text only;
-  embeddings fall back to local MiniLM (see rag_pipeline).
+- OpenAI-compatible APIs for chat only (embeddings fall back to local MiniLM, see rag_pipeline):
+  - openrouter  (OPENROUTER_API_KEY): free ':free' models, no card needed.
+  - custom      (LLM_BASE_URL + LLM_API_KEY + LLM_MODEL): any OpenAI-compatible API,
+                e.g. Groq, Gemini's OpenAI endpoint, or a local Ollama server.
+  - huggingface (HF_TOKEN): Inference Providers router; needs paid credits on free accounts.
 
-LLM_PROVIDER=auto|azure|huggingface (default auto: Azure if configured, else
-Hugging Face if HF_TOKEN is set, else none -> offline rules/extractive answers).
+LLM_PROVIDER=auto|azure|openrouter|custom|huggingface. auto picks the first configured in
+AUTO_ORDER; with none configured -> offline rules / extractive answers.
 
 Env vars are read at call time (not import time) so load_dotenv() ordering
 in the entry points does not matter.
@@ -18,17 +20,30 @@ from dataclasses import dataclass
 from openai import AzureOpenAI, OpenAI
 
 DEFAULT_API_VERSION = "2024-02-15-preview"
-PLACEHOLDER_MARKERS = ("your-key", "your_key", "hf_your")
+PLACEHOLDER_MARKERS = ("your-key", "your_key", "hf_your", "sk-or-your")
 
 HF_BASE_URL = "https://router.huggingface.co/v1"
-# Not gated, supports JSON output; ~$0.001 of free monthly credit per extraction (3 runs)
 HF_DEFAULT_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# $0 model with JSON output support; free models are rate-limited per day/minute by OpenRouter
+OPENROUTER_DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+
+# name -> (api key env, base url env or fixed url, model env, default model)
+OPENAI_COMPATIBLE = {
+    'openrouter': ('OPENROUTER_API_KEY', OPENROUTER_BASE_URL, 'OPENROUTER_MODEL', OPENROUTER_DEFAULT_MODEL),
+    'custom': ('LLM_API_KEY', None, 'LLM_MODEL', None),
+    'huggingface': ('HF_TOKEN', HF_BASE_URL, 'HF_MODEL', HF_DEFAULT_MODEL),
+}
+# Free providers first; Hugging Face last because free accounts get 402 (no credits)
+AUTO_ORDER = ('azure', 'openrouter', 'custom', 'huggingface')
+PROVIDER_ALIASES = {'hf': 'huggingface'}
 
 @dataclass
 class ChatBackend:
     client: object
     model: str
-    provider: str  # 'azure' | 'huggingface'
+    provider: str  # 'azure' | 'openrouter' | 'custom' | 'huggingface'
 
 def _clean_endpoint(endpoint):
     """Accept either the resource URL or a full deployment URL copied from the portal."""
@@ -57,17 +72,31 @@ def get_client():
         azure_endpoint=_clean_endpoint(os.getenv("AZURE_OPENAI_ENDPOINT")),
     )
 
+def _openai_compatible(name):
+    """ChatBackend for an OpenAI-compatible provider, or None if it is not fully configured."""
+    key_env, base_url, model_env, default_model = OPENAI_COMPATIBLE[name]
+    api_key = os.getenv(key_env)
+    base_url = base_url or os.getenv('LLM_BASE_URL')
+    model = os.getenv(model_env) or default_model
+    if not (_real(api_key) and base_url and model):
+        return None
+    return ChatBackend(OpenAI(base_url=base_url, api_key=api_key), model, name)
+
 def get_chat_backend():
     """
     Chat-completion backend for extraction and RAG answers, or None.
-    Both providers expose client.chat.completions.create(model=..., messages=...).
+    All providers expose client.chat.completions.create(model=..., messages=...).
     """
     provider = (os.getenv("LLM_PROVIDER") or "auto").lower()
-    if provider in ("auto", "azure") and is_configured():
-        return ChatBackend(get_client(), chat_deployment(), "azure")
-    if provider in ("auto", "huggingface", "hf") and hf_configured():
-        client = OpenAI(base_url=os.getenv("HF_BASE_URL") or HF_BASE_URL, api_key=os.getenv("HF_TOKEN"))
-        return ChatBackend(client, os.getenv("HF_MODEL") or HF_DEFAULT_MODEL, "huggingface")
+    provider = PROVIDER_ALIASES.get(provider, provider)
+    for name in (AUTO_ORDER if provider == 'auto' else (provider,)):
+        if name == 'azure':
+            if is_configured():
+                return ChatBackend(get_client(), chat_deployment(), 'azure')
+        elif name in OPENAI_COMPATIBLE:
+            backend = _openai_compatible(name)
+            if backend:
+                return backend
     return None
 
 def chat_deployment():

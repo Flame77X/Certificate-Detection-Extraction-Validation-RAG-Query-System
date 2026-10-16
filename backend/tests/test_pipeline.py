@@ -35,8 +35,11 @@ class TestChatBackendSelection(unittest.TestCase):
     AZURE = {'AZURE_OPENAI_API_KEY': 'k', 'AZURE_OPENAI_ENDPOINT': 'https://x.openai.azure.com'}
     HF = {'HF_TOKEN': 'hf_abc123'}
 
+    OPENROUTER = {'OPENROUTER_API_KEY': 'sk-or-v1-abc'}
+
     def backend(self, env):
-        clean = {k: '' for k in ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'HF_TOKEN', 'LLM_PROVIDER', 'HF_MODEL')}
+        clean = {k: '' for k in ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'HF_TOKEN', 'LLM_PROVIDER', 'HF_MODEL',
+                                 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL')}
         with mock.patch.dict(os.environ, {**clean, **env}):
             return llm_client.get_chat_backend()
 
@@ -51,6 +54,16 @@ class TestChatBackendSelection(unittest.TestCase):
     def test_forced_provider_and_model_override(self):
         backend = self.backend({**self.AZURE, **self.HF, 'LLM_PROVIDER': 'huggingface', 'HF_MODEL': 'org/model'})
         self.assertEqual((backend.provider, backend.model), ('huggingface', 'org/model'))
+
+    def test_openrouter_free_model_preferred_over_huggingface(self):
+        backend = self.backend({**self.OPENROUTER, **self.HF})
+        self.assertEqual((backend.provider, backend.model), ('openrouter', llm_client.OPENROUTER_DEFAULT_MODEL))
+        self.assertEqual(str(backend.client.base_url).rstrip('/'), llm_client.OPENROUTER_BASE_URL)
+
+    def test_custom_openai_compatible_needs_url_and_model(self):
+        self.assertIsNone(self.backend({'LLM_API_KEY': 'k', 'LLM_BASE_URL': 'https://api.example.com/v1'}))
+        backend = self.backend({'LLM_API_KEY': 'k', 'LLM_BASE_URL': 'https://api.example.com/v1', 'LLM_MODEL': 'llama'})
+        self.assertEqual((backend.provider, backend.model), ('custom', 'llama'))
 
     def test_none_without_credentials_or_with_placeholders(self):
         self.assertIsNone(self.backend({}))
