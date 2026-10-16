@@ -19,3 +19,12 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated runtime data
+extraction_logs.json
+batch_results.json
+backend/data/chroma_db/
+.venv/
+venv/
+backend/data/uploads/
+data/uploads/
