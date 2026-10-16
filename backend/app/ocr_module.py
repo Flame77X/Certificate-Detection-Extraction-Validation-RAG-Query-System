@@ -4,12 +4,19 @@ import mimetypes
 from pypdf import PdfReader
 
 from app.security import validate_secure_path, check_file_size
-from app.llm_client import get_client, chat_deployment
+from app.llm_client import get_client, chat_deployment, is_configured
 
 # Below this many characters a PDF is treated as scanned (image-only)
 MIN_PDF_TEXT_CHARS = 50
 # Cap vision calls per scanned PDF (cost / latency)
 MAX_SCANNED_PAGES = 3
+
+# OCR engine: 'azure' (GPT vision), 'local' (RapidOCR, free/offline), 'auto' (azure if configured, else local)
+OCR_PROVIDERS = ('auto', 'azure', 'local')
+# Lines RapidOCR scores below this are dropped as noise
+LOCAL_OCR_MIN_SCORE = 0.5
+
+_local_engine = None
 
 VISION_PROMPT = (
     "Transcribe all text visible in this certificate image exactly as printed, "
@@ -23,7 +30,7 @@ def extract_text_from_file(file_path):
     Strategies:
     1. Direct Text Read (TXT)
     2. Digital PDF Extraction (PyPDF)
-    3. Vision OCR (Azure GPT-4) - For images & scanned PDFs
+    3. Image OCR (Azure GPT vision or local RapidOCR, see OCR_PROVIDER) - For images & scanned PDFs
     """
     # --- SECURITY CHECKS ---
     safe_path = validate_secure_path(file_path)
@@ -51,15 +58,17 @@ def extract_text_from_file(file_path):
 
             # If empty/scanned PDF, OCR the page images embedded in the PDF
             if len(text_content.strip()) < MIN_PDF_TEXT_CHARS:
-                print("⚠️ Low text content (Scanned PDF?). Switching to Vision OCR...")
+                print("⚠️ Low text content (Scanned PDF?). Switching to image OCR...")
                 scanned_text = extract_scanned_pdf(file_path)
                 if scanned_text.strip():
                     text_content = scanned_text
                     used_ocr = True
 
         elif ext in ['jpg', 'jpeg', 'png', 'bmp', 'tiff']:
-            print(f"📷 Image detected ({ext}). Using Azure Vision OCR...")
-            text_content = extract_with_vision(file_path)
+            print(f"📷 Image detected ({ext}). Running OCR...")
+            mime_type, _ = mimetypes.guess_type(file_path)
+            with open(file_path, "rb") as image_file:
+                text_content = ocr_image(image_file.read(), mime_type or "image/jpeg")
             used_ocr = True
 
     except Exception as e:
@@ -87,10 +96,44 @@ def extract_scanned_pdf(file_path):
             continue
         for image in images:
             mime_type, _ = mimetypes.guess_type(image.name)
-            text = _vision_ocr(image.data, mime_type or "image/png")
+            text = ocr_image(image.data, mime_type or "image/png")
             if text:
                 page_texts.append(text)
     return "\n".join(page_texts)
+
+def _ocr_provider():
+    provider = os.getenv("OCR_PROVIDER", "auto").lower()
+    return provider if provider in OCR_PROVIDERS else "auto"
+
+def ocr_image(image_bytes, mime_type):
+    """Route image OCR to the configured engine. In 'auto', fall back to local OCR if Azure returns nothing."""
+    provider = _ocr_provider()
+    if provider == "local" or (provider == "auto" and not is_configured()):
+        return _local_ocr(image_bytes)
+    text = _vision_ocr(image_bytes, mime_type)
+    if not text.strip() and provider == "auto":
+        print("ℹ️  Azure vision returned no text; trying local OCR.")
+        return _local_ocr(image_bytes)
+    return text
+
+def _local_ocr(image_bytes):
+    """Free, offline OCR with RapidOCR (PaddleOCR models on ONNX Runtime, CPU)."""
+    global _local_engine
+    try:
+        if _local_engine is None:
+            from rapidocr import RapidOCR  # lazy: model load takes ~1s
+            _local_engine = RapidOCR(params={"Global.log_level": "error"})
+        result = _local_engine(image_bytes)
+    except ImportError:
+        print("❌ Local OCR unavailable: pip install rapidocr onnxruntime")
+        return ""
+    except Exception as e:
+        print(f"❌ Local OCR Failed: {e}")
+        return ""
+
+    if not result.txts:
+        return ""
+    return "\n".join(t for t, s in zip(result.txts, result.scores) if s >= LOCAL_OCR_MIN_SCORE)
 
 def extract_with_vision(file_path):
     """

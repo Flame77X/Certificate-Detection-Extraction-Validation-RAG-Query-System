@@ -13,6 +13,7 @@ sys.path.append(BACKEND_DIR)
 
 from app import field_extraction as fe
 from app import rag_pipeline as rp
+from app import ocr_module
 from app.date_validation import validate_dates, validate_issuer, normalize_issuer
 from app.logging_utils import check_for_issues
 from app.security import validate_secure_path, redact_pii, ALLOWED_DATA_DIR
@@ -25,6 +26,33 @@ def fake_chat_client(contents):
     def create(**_kwargs):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=next(replies)))])
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+
+class TestOCRRouting(unittest.TestCase):
+
+    def route(self, provider, configured, vision_text='azure text'):
+        with mock.patch.dict(os.environ, {'OCR_PROVIDER': provider}),              mock.patch.object(ocr_module, 'is_configured', return_value=configured),              mock.patch.object(ocr_module, '_vision_ocr', return_value=vision_text) as vision,              mock.patch.object(ocr_module, '_local_ocr', return_value='local text') as local:
+            return ocr_module.ocr_image(b'img', 'image/png'), vision.called, local.called
+
+    def test_auto_without_azure_uses_local(self):
+        self.assertEqual(self.route('auto', False), ('local text', False, True))
+
+    def test_auto_with_azure_uses_vision(self):
+        self.assertEqual(self.route('auto', True), ('azure text', True, False))
+
+    def test_auto_falls_back_to_local_when_vision_empty(self):
+        self.assertEqual(self.route('auto', True, vision_text=''), ('local text', True, True))
+
+    def test_forced_local(self):
+        self.assertEqual(self.route('local', True), ('local text', False, True))
+
+    @unittest.skipUnless(importlib.util.find_spec('rapidocr'), 'rapidocr not installed')
+    def test_local_ocr_reads_synthetic_samples(self):
+        with mock.patch.dict(os.environ, {'OCR_PROVIDER': 'local'}):
+            for name in ('sample_cert_image.png', 'sample_scanned_cert.pdf'):
+                text, used_ocr = ocr_module.extract_text_from_file(os.path.join(ALLOWED_DATA_DIR, name))
+                self.assertTrue(used_ocr, name)
+                self.assertIn('Certificate Number', text, name)
 
 
 class TestConsensus(unittest.TestCase):
