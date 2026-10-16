@@ -76,13 +76,12 @@ def file_too_large(_e):
 @app.route('/query', methods=['POST'])
 def query_rag():
     if not rag:
-        return jsonify({'answer': "RAG System is offline."})
+        return jsonify({'answer': "RAG System is offline.", 'sources': []})
     data = request.get_json(silent=True) or {}
     question = (data.get('question') or '').strip()
     if not question:
         return jsonify({'error': 'Field "question" is required.'}), 400
-    answer = rag.answer_question(question)
-    return jsonify({'answer': answer})
+    return jsonify(rag.answer_question(question))
 
 if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes')

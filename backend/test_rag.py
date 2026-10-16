@@ -25,8 +25,9 @@ def test_rag():
     question = "Is the certificate for PramAnA AyurTech valid?"
     print(f"\n❓ Asking Question: '{question}'")
     
-    answer = rag.answer_question(question)
-    print(f"\n🤖 RAG Answer:\n{answer}")
+    result = rag.answer_question(question)
+    print(f"\n🤖 RAG Answer:\n{result['answer']}")
+    print(f"📎 Sources: {[s['doc_id'] for s in result['sources']]}")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv

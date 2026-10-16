@@ -152,6 +152,12 @@
             return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
         }
 
+        function renderSources(sources) {
+            if (!sources || !sources.length) return '';
+            const ids = sources.map(s => escapeHtml(s.doc_id)).join(', ');
+            return `<div style="font-size:0.8em; color:var(--text-muted); margin-top:6px;">Sources: ${ids}</div>`;
+        }
+
         // --- Drag & Drop ---
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
@@ -301,7 +307,7 @@
             history.innerHTML += `
                 <div class="msg ai">
                     <div class="avatar-ai"><i data-lucide="bot"></i></div>
-                    <div class="bubble">${renderAnswer(data.answer || data.error)}</div>
+                    <div class="bubble">${renderAnswer(data.answer || data.error)}${renderSources(data.sources)}</div>
                 </div>
             `;
             history.scrollTop = history.scrollHeight;
