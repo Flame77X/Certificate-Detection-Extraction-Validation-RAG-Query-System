@@ -56,14 +56,14 @@ def upload_file():
         file.save(filepath)
 
         # 1. Extraction & Validation (The "Brain")
-        result = process_single_file(filepath)
+        result, document_text = process_single_file(filepath, include_text=True)
 
         if not result:
              return jsonify({'success': False, 'error': 'Document processing failed or not a certificate.'}), 400
 
-        # 2. RAG Ingestion (The "Memory")
+        # 2. RAG Ingestion (The "Memory"): extracted fields + full document text for chat
         if rag:
-            rag.ingest_certificate(result)
+            rag.ingest_certificate(result, document_text=document_text)
 
         return jsonify({'success': True, 'data': result})
 
@@ -99,7 +99,7 @@ def settings():
         'ocr': 'azure vision' if (is_configured() and (os.getenv('OCR_PROVIDER') or 'auto').lower() != 'local')
                else 'local (RapidOCR)',
         'embeddings': ('azure' if rag and rag.embedding_mode == 'azure' else 'local (all-MiniLM-L6-v2)') if rag else 'offline',
-        'indexed_certificates': rag.collection.count() if rag else 0,
+        'indexed_certificates': len(rag.list_certificates()) if rag else 0,  # not counting text chunks
         'trusted_issuers': trusted,
         'max_file_size_mb': MAX_FILE_SIZE_MB,
         'allowed_extensions': sorted(ALLOWED_EXTENSIONS),

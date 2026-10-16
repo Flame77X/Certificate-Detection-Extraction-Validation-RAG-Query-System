@@ -396,6 +396,57 @@ class TestRAG(unittest.TestCase):
         self.assertEqual(result['answer'], 'You have Cloud Operations [C1]')
         self.assertEqual(result['sources'][0]['doc_id'], 'C1')
 
+    LETTER = ('Northfield Institute of Technology\nRef.No.: NIT/R/2024/L07\nTO WHOMSOEVER IT MAY CONCERN\n'
+              'This is to certify that Ms. Jane Sample has submitted her thesis titled Robust Solar Coatings '
+              'under the guidance of Dr. Alan Example (Guide ID 4411) and it is under evaluation.')
+
+    def test_chunk_text_overlaps_and_covers_everything(self):
+        text = ' '.join(f'word{i}' for i in range(600))
+        chunks = rp.chunk_text(text)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(c) <= rp.CHUNK_CHARS for c in chunks))
+        self.assertIn('word0', chunks[0])
+        self.assertIn('word599', chunks[-1])
+        self.assertEqual(rp.chunk_text('   '), [])
+
+    def test_document_text_is_indexed_and_sent_to_llm(self):
+        seen = {}
+        def create(**kwargs):
+            seen['prompt'] = kwargs['messages'][1]['content']
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Dr. Alan Example [L1]'))])
+        chat = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        self.get_chat_backend.return_value = llm_client.ChatBackend(chat, 'm', 'openrouter')
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            result = rag.ingest_certificate({'doc_id': 'L1', 'fields': {'issuer': 'Northfield Institute of Technology'}},
+                                            document_text=self.LETTER)
+            answer = rag.answer_question('Who is the guide?', doc_id='L1')
+            history = rag.list_certificates()
+        self.assertEqual(result['chunks'], 1)
+        self.assertIn('Dr. Alan Example', seen['prompt'])          # full text reached the model
+        self.assertEqual(answer['sources'][0]['doc_id'], 'L1')
+        self.assertEqual([h['doc_id'] for h in history], ['L1'])   # chunks are not listed as certificates
+
+    def test_reingest_replaces_old_chunks(self):
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            rag.ingest_certificate({'doc_id': 'L1', 'fields': {}}, document_text='x ' * 2000)
+            many = rag.collection.count()
+            rag.ingest_certificate({'doc_id': 'L1', 'fields': {}}, document_text='short text')
+            self.assertGreater(many, 2)
+            self.assertEqual(rag.collection.count(), 2)  # summary + 1 chunk
+
+    def test_offline_answer_includes_relevant_passage(self):
+        with mock.patch.object(rp, 'get_client', return_value=None), \
+             mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
+            rag = rp.CertificateRAG(db_path=self.db_dir)
+            rag.ingest_certificate({'doc_id': 'L1', 'fields': {'issuer': 'Northfield'}}, document_text=self.LETTER)
+            answer = rag.answer_question('Who is the guide?', doc_id='L1')['answer']
+        self.assertIn('Most relevant passage', answer)
+        self.assertIn('Dr. Alan Example', answer)
+
     def test_sources_limited_to_cited_records(self):
         rag, _ = self.offline_rag_with_chat(fake_chat_client(['first']))
         with mock.patch.object(rp.CertificateRAG, '_local_embed', self.local_embed):
@@ -505,15 +556,15 @@ class TestFlaskAPI(unittest.TestCase):
         self.assertFalse(res.json['success'])
 
     def test_traversal_filename_is_sanitised(self):
-        with mock.patch.object(self.server, 'process_single_file', return_value={'doc_id': 'x'}) as proc:
+        with mock.patch.object(self.server, 'process_single_file', return_value=({'doc_id': 'x'}, 'full text')) as proc:
             res = self.upload('../../cert.txt')
         self.assertEqual(res.status_code, 200)
         saved_path = proc.call_args[0][0]
         self.assertEqual(saved_path, os.path.join(self.upload_dir, 'cert.txt'))
-        self.server.rag.ingest_certificate.assert_called_once_with({'doc_id': 'x'})
+        self.server.rag.ingest_certificate.assert_called_once_with({'doc_id': 'x'}, document_text='full text')
 
     def test_not_a_certificate_returns_400(self):
-        with mock.patch.object(self.server, 'process_single_file', return_value=None):
+        with mock.patch.object(self.server, 'process_single_file', return_value=(None, '')):
             self.assertEqual(self.upload('cert.txt').status_code, 400)
 
     def test_oversized_upload_returns_413(self):
@@ -527,7 +578,7 @@ class TestFlaskAPI(unittest.TestCase):
 
     def test_settings_reports_config_without_secrets(self):
         self.server.rag.embedding_mode = 'local'
-        self.server.rag.collection.count.return_value = 2
+        self.server.rag.list_certificates.return_value = [{'doc_id': 'A'}, {'doc_id': 'B'}]
         # Clear every provider var: loading app.py reads the developer's real .env
         env = {'HF_TOKEN': 'hf_secretvalue123', 'AZURE_OPENAI_API_KEY': '', 'LLM_PROVIDER': '',
                'OPENROUTER_API_KEY': '', 'LLM_API_KEY': ''}

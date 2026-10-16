@@ -20,8 +20,13 @@ from app.security import validate_secure_path, MAX_BATCH_SIZE, redact_pii, BACKE
 from app.status_assignment import assign_certificate_status
 from app.external_verification import verify_external_issuer
 
-def process_single_file(file_path):
-    """Run the entire extraction pipeline on a single file"""
+def process_single_file(file_path, include_text=False):
+    """
+    Run the entire extraction pipeline on a single file.
+    include_text=True returns (output, document_text) so the caller can index the full text for RAG;
+    the text is never part of the output dict (keeps API responses and batch_results.json small and PII-light).
+    """
+    failed = (None, "") if include_text else None
     print(f"--- Processing: {file_path} ---")
     
     # Security: Path validation handled inside extract_text_from_file -> validate_secure_path
@@ -29,7 +34,7 @@ def process_single_file(file_path):
     
     if not os.path.exists(file_path):
         print(f"❌ File not found: {file_path}")
-        return None
+        return failed
 
     # 1. Identification
     file_ext = file_path.split('.')[-1].lower()
@@ -40,7 +45,7 @@ def process_single_file(file_path):
         text_content, used_ocr = extract_text_from_file(file_path)
     except Exception as e:
         print(f"⛔ Security/Error: {e}")
-        return None
+        return failed
 
     if not text_content:
         print("⚠️  No text could be extracted.")
@@ -49,7 +54,7 @@ def process_single_file(file_path):
     is_valid = is_certificate(file_ext, text_content)
     if not is_valid:
         print("❌ Document is NOT classified as a certificate.")
-        return None
+        return failed
 
     print("✅ Identified as certificate.")
 
@@ -104,7 +109,7 @@ def process_single_file(file_path):
     output['extraction_method'] = extractor_output.get('_method', 'none')
     # output['voting_analysis'] = voting_details 
     
-    return output
+    return (output, text_content) if include_text else output
 
 def process_batch(csv_file):
     """Read a CSV and process all files listed"""
