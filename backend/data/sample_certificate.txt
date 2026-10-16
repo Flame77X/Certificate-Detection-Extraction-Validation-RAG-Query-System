@@ -1,7 +1,7 @@
 CERTIFICATE OF EXCELLENCE
 
 This is to certify that
-Rahul
+Alex Sample
 has successfully completed the
 Advanced Python Systems Engineering
 Certification Program

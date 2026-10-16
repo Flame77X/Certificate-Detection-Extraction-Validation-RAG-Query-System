@@ -28,3 +28,8 @@ backend/data/chroma_db/
 venv/
 backend/data/uploads/
 data/uploads/
+
+# Only synthetic fixtures may be committed from backend/data (never real certificates)
+backend/data/*
+!backend/data/sample_*
+!backend/data/batch_test.csv
